@@ -144,6 +144,50 @@ def _build_mlp_policy_model(
     return model
 
 
+def _build_general_ops_model(batch: int, input_size: int, output_size: int, seed: int = 0) -> onnx.ModelProto:
+    rng = np.random.default_rng(seed)
+    arrays = {
+        "weight": (rng.standard_normal((output_size, input_size)) * 0.3).astype(np.float32),
+        "bias": (rng.standard_normal(output_size) * 0.05).astype(np.float32),
+        "scale": rng.uniform(0.5, 1.5, output_size).astype(np.float32),
+        "bn_bias": (rng.standard_normal(output_size) * 0.05).astype(np.float32),
+        "mean": (rng.standard_normal(output_size) * 0.1).astype(np.float32),
+        "variance": rng.uniform(0.5, 1.5, output_size).astype(np.float32),
+        "epsilon": np.asarray([1.0e-6], dtype=np.float32),
+        "rms_scale": rng.uniform(0.8, 1.2, output_size).astype(np.float32),
+        "zero": np.asarray([0.0], dtype=np.float32),
+    }
+    nodes = [
+        helper.make_node("Gemm", ["input", "weight", "bias"], ["linear"], transB=1),
+        helper.make_node(
+            "BatchNormalization",
+            ["linear", "scale", "bn_bias", "mean", "variance"],
+            ["normalized"],
+            epsilon=1.0e-5,
+        ),
+        helper.make_node("Relu", ["normalized"], ["activated"]),
+        helper.make_node("Mul", ["activated", "activated"], ["squared"]),
+        helper.make_node("ReduceMean", ["squared"], ["mean_square"], axes=[1], keepdims=1),
+        helper.make_node("Add", ["mean_square", "epsilon"], ["mean_square_epsilon"]),
+        helper.make_node("Sqrt", ["mean_square_epsilon"], ["root"]),
+        helper.make_node("Div", ["activated", "root"], ["unit"]),
+        helper.make_node("Mul", ["unit", "rms_scale"], ["scaled_unit"]),
+        helper.make_node("Sub", ["scaled_unit", "zero"], ["shifted"]),
+        helper.make_node("Tanh", ["shifted"], ["output"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "general_ops",
+        [helper.make_tensor_value_info("input", TensorProto.FLOAT, [batch, input_size])],
+        [helper.make_tensor_value_info("output", TensorProto.FLOAT, [batch, output_size])],
+        [numpy_helper.from_array(value, name=name) for name, value in arrays.items()],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.checker.check_model(model)
+    return model
+
+
 def _lstm_step_reference(
     x: np.ndarray,
     h_prev: np.ndarray,
@@ -189,16 +233,47 @@ def _build_lstm_step_model(batch: int, input_size: int, hidden_size: int, seed: 
         numpy_helper.from_array(np.array([0, 1], dtype=np.int64), name="squeeze_axes"),
     ]
     nodes = [
-        helper.make_node("LSTM", ["input", "W", "R", "B", "", "h_in", "c_in"], ["Y", "h_out", "c_out"], hidden_size=H),
+        helper.make_node(
+            "LSTM",
+            ["input", "W", "R", "B", "", "h_in", "c_in"],
+            ["Y", "h_out", "c_out"],
+            hidden_size=H,
+        ),
         helper.make_node("Squeeze", ["Y", "squeeze_axes"], ["Y_2d"]),
         helper.make_node("Gemm", ["Y_2d", "Wd", "bd"], ["output"], alpha=1.0, beta=1.0, transB=1),
     ]
     graph = helper.make_graph(
-        nodes, "lstm_step", [x_in, h_in, c_in], [y_out, h_out_v, c_out_v], initializer=initializers
+        nodes,
+        "lstm_step",
+        [x_in, h_in, c_in],
+        [y_out, h_out_v, c_out_v],
+        initializer=initializers,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
     model.ir_version = 8
     return model
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        helper.make_node("Gemm", [], ["out"], transB=1),
+        helper.make_node("Gemm", ["missing", "B", "bias"], ["out"], transB=1),
+    ],
+    ids=["missing-inputs", "undefined-input"],
+)
+def test_rejects_invalid_model(node):
+    output = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, 1])
+    model = helper.make_model(helper.make_graph([node], "invalid", [], [output]))
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        with pytest.raises(ValueError, match="OnnxRuntime: invalid ONNX model"):
+            OnnxRuntime(str(path), device="cpu")
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize("device", ["cuda"])
@@ -218,7 +293,12 @@ def test_mlp_policy(device):
         rt = OnnxRuntime(str(path), device=device, batch_size=1)
         out = rt({"observation": wp.array(obs, dtype=wp.float32, device=device)})
         for name, expected_arr in expected.items():
-            check_arrays(out[name], wp.array(expected_arr, dtype=wp.float32, device=device), rtol=1e-3, atol=1e-4)
+            check_arrays(
+                out[name],
+                wp.array(expected_arr, dtype=wp.float32, device=device),
+                rtol=1e-3,
+                atol=1e-4,
+            )
     finally:
         path.unlink(missing_ok=True)
 
@@ -293,7 +373,126 @@ def test_graph_capture_replay(device):
 
         expected = _run_numpy_mlp(model, {"observation": replay_obs_np})
         for name, expected_arr in expected.items():
-            check_arrays(out[name], wp.array(expected_arr, dtype=wp.float32, device=device), rtol=1e-3, atol=1e-4)
+            check_arrays(
+                out[name],
+                wp.array(expected_arr, dtype=wp.float32, device=device),
+                rtol=1e-3,
+                atol=1e-4,
+            )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_general_ops_graph_capture_is_deterministic(device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    batch, input_size, output_size = 65, 16, 9
+    model = _build_general_ops_model(batch, input_size, output_size, seed=31)
+    values = {item.name: numpy_helper.to_array(item) for item in model.graph.initializer}
+    rng = np.random.default_rng(31)
+    input_np = rng.standard_normal((batch, input_size)).astype(np.float32)
+
+    def reference(x, output="output"):
+        linear = x @ values["weight"].T + values["bias"]
+        normalized = (linear - values["mean"]) / np.sqrt(values["variance"] + 1.0e-5)
+        activated = np.maximum(normalized * values["scale"] + values["bn_bias"], 0.0)
+        root = np.sqrt(np.mean(activated * activated, axis=1, keepdims=True) + values["epsilon"])
+        unit = activated / root
+        if output == "unit":
+            return unit.astype(np.float32)
+        return np.tanh(unit * values["rms_scale"] - values["zero"]).astype(np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        with pytest.raises(NotImplementedError, match="deterministic gradients"):
+            OnnxRuntime(str(path), device=device, batch_size=batch, requires_grad=True)
+        rt = OnnxRuntime(str(path), device=device, batch_size=batch)
+        op_types = {op.op_type for op in rt._ops}
+        assert {"_BatchNormalizationRelu", "_RmsNormalization"} <= op_types
+        assert "Mul" not in op_types
+        owned_ptrs = {name: int(value.ptr) for name, value in rt._tensors.items()}
+        input_wp = wp.array(input_np, dtype=wp.float32, device=device)
+        outputs = rt({"input": input_wp})
+        check_arrays(
+            outputs["output"],
+            wp.array(reference(input_np), dtype=wp.float32, device=device),
+            rtol=1.0e-5,
+            atol=1.0e-6,
+        )
+
+        wp.capture_begin(device=device)
+        try:
+            outputs = rt({"input": input_wp})
+            graph = wp.capture_end(device=device)
+        except Exception:
+            wp.capture_end(device=device)
+            raise
+
+        replay_input = rng.standard_normal((batch, input_size)).astype(np.float32)
+        input_wp.assign(replay_input)
+        wp.capture_launch(graph)
+        first = outputs["output"].numpy().copy()
+        wp.capture_launch(graph)
+        second = outputs["output"].numpy().copy()
+        np.testing.assert_array_equal(first, second)
+        np.testing.assert_allclose(first, reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
+        assert owned_ptrs == {name: int(rt._tensors[name].ptr) for name in owned_ptrs}
+
+        model.graph.output.extend(
+            [
+                helper.make_tensor_value_info("normalized", TensorProto.FLOAT, [batch, output_size]),
+                helper.make_tensor_value_info("squared", TensorProto.FLOAT, [batch, output_size]),
+            ]
+        )
+        onnx.save(model, str(path))
+        unfused_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
+        assert all(not op.op_type.startswith("_") for op in unfused_rt._ops)
+        unfused_output = unfused_rt({"input": input_wp})["output"]
+        np.testing.assert_allclose(unfused_output.numpy(), reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
+
+        observable_unit_model = _build_general_ops_model(batch, input_size, output_size, seed=31)
+        observable_unit_model.graph.output.append(
+            helper.make_tensor_value_info("unit", TensorProto.FLOAT, [batch, output_size])
+        )
+        onnx.checker.check_model(observable_unit_model)
+        onnx.save(observable_unit_model, str(path))
+        observable_unit_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
+        observable_op_types = {op.op_type for op in observable_unit_rt._ops}
+        assert "_RmsNormalization" in observable_op_types
+        assert "Mul" in observable_op_types
+        observable_outputs = observable_unit_rt({"input": input_wp})
+        np.testing.assert_allclose(
+            observable_outputs["unit"].numpy(), reference(replay_input, "unit"), rtol=1.0e-5, atol=1.0e-6
+        )
+        np.testing.assert_allclose(
+            observable_outputs["output"].numpy(), reference(replay_input), rtol=1.0e-5, atol=1.0e-6
+        )
+
+        dynamic_scale_model = _build_general_ops_model(batch, input_size, output_size, seed=31)
+        scale_index = next(
+            i for i, item in enumerate(dynamic_scale_model.graph.initializer) if item.name == "rms_scale"
+        )
+        del dynamic_scale_model.graph.initializer[scale_index]
+        dynamic_scale_model.graph.input.append(
+            helper.make_tensor_value_info("rms_scale", TensorProto.FLOAT, [output_size])
+        )
+        onnx.checker.check_model(dynamic_scale_model)
+        onnx.save(dynamic_scale_model, str(path))
+        dynamic_scale_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
+        dynamic_op_types = {op.op_type for op in dynamic_scale_rt._ops}
+        assert "_RmsNormalization" in dynamic_op_types
+        assert "Mul" in dynamic_op_types
+        dynamic_scale_output = dynamic_scale_rt(
+            {
+                "input": input_wp,
+                "rms_scale": wp.array(values["rms_scale"], dtype=wp.float32, device=device),
+            }
+        )["output"]
+        np.testing.assert_allclose(dynamic_scale_output.numpy(), reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
     finally:
         path.unlink(missing_ok=True)
 
@@ -305,7 +504,7 @@ def test_rejects_unsupported_ops(device):
 
     model = helper.make_model(
         helper.make_graph(
-            nodes=[helper.make_node("Relu", ["A"], ["Y"])],
+            nodes=[helper.make_node("Sigmoid", ["A"], ["Y"])],
             name="reject",
             inputs=[helper.make_tensor_value_info("A", TensorProto.FLOAT, [1, 4])],
             outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 4])],
@@ -318,7 +517,50 @@ def test_rejects_unsupported_ops(device):
         path = Path(tmp.name)
     try:
         onnx.save(model, str(path))
-        with pytest.raises(NotImplementedError, match="unsupported op 'Relu'"):
+        with pytest.raises(NotImplementedError, match="unsupported op 'Sigmoid'"):
+            OnnxRuntime(str(path), device=device)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_rejects_unsupported_op_variants(device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        model = _build_general_ops_model(2, 4, 4)
+        del model.graph.node[0].attribute[:]
+        onnx.save(model, str(path))
+        with pytest.raises(NotImplementedError, match="only transB=1"):
+            OnnxRuntime(str(path), device=device, batch_size=2)
+
+        model = _build_general_ops_model(2, 4, 4)
+        epsilon = next(item for item in model.graph.initializer if item.name == "epsilon")
+        epsilon.CopyFrom(numpy_helper.from_array(np.asarray([[1.0e-6]], dtype=np.float32), name="epsilon"))
+        onnx.checker.check_model(model)
+        onnx.save(model, str(path))
+        with pytest.raises(ValueError, match=r"epsilon must have shape \(1,\)"):
+            OnnxRuntime(str(path), device=device, batch_size=2)
+
+        model = helper.make_model(
+            helper.make_graph(
+                nodes=[helper.make_node("Add", ["A", "B"], ["Y"])],
+                name="reject_1d_binary",
+                inputs=[
+                    helper.make_tensor_value_info("A", TensorProto.FLOAT, [4]),
+                    helper.make_tensor_value_info("B", TensorProto.FLOAT, [4]),
+                ],
+                outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, [4])],
+            ),
+            opset_imports=[helper.make_opsetid("", 17)],
+        )
+        model.ir_version = 8
+        onnx.checker.check_model(model)
+        onnx.save(model, str(path))
+        with pytest.raises(NotImplementedError, match="at least one input must be 2-D"):
             OnnxRuntime(str(path), device=device)
     finally:
         path.unlink(missing_ok=True)
@@ -359,7 +601,12 @@ def test_lstm_single_step(device):
                 "c_in": wp.array(c_np, dtype=wp.float32, device=device),
             }
         )
-        check_arrays(out["output"], wp.array(expected_out, dtype=wp.float32, device=device), rtol=1e-3, atol=1e-4)
+        check_arrays(
+            out["output"],
+            wp.array(expected_out, dtype=wp.float32, device=device),
+            rtol=1e-3,
+            atol=1e-4,
+        )
         check_arrays(
             out["h_out"],
             wp.array(h_ref.reshape(1, batch, hidden_size), dtype=wp.float32, device=device),
@@ -472,6 +719,11 @@ def test_lstm_graph_capture_replay(device):
 
         h_ref, _ = _lstm_step_reference(replay_x[0], h_np[0], c_np[0], W, R, Bx, Bh)
         expected = (h_ref @ Wd.T + bd).reshape(batch, 1).astype(np.float32)
-        check_arrays(out["output"], wp.array(expected, dtype=wp.float32, device=device), rtol=1e-3, atol=1e-4)
+        check_arrays(
+            out["output"],
+            wp.array(expected, dtype=wp.float32, device=device),
+            rtol=1e-3,
+            atol=1e-4,
+        )
     finally:
         path.unlink(missing_ok=True)
