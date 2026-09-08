@@ -60,6 +60,12 @@ def _run_numpy_mlp(model: onnx.ModelProto, feeds: dict[str, np.ndarray]) -> dict
             x = values[node.input[0]]
             alpha = float(attrs.get("alpha", 1.0))
             values[node.output[0]] = np.where(x >= 0.0, x, alpha * (np.exp(x) - 1.0)).astype(np.float32)
+        elif node.op_type in ("Max", "Min"):
+            reduction = np.maximum if node.op_type == "Max" else np.minimum
+            result = values[node.input[0]]
+            for input_name in node.input[1:]:
+                result = reduction(result, values[input_name])
+            values[node.output[0]] = result.astype(np.float32)
         else:
             raise NotImplementedError(f"unsupported op in policy reference: {node.op_type}")
 
@@ -188,6 +194,65 @@ def _build_general_ops_model(batch: int, input_size: int, output_size: int, seed
     return model
 
 
+def _build_clipped_policy_model(
+    *,
+    batch: int = 1,
+    seed: int = 0,
+) -> onnx.ModelProto:
+    """Build a policy with broadcast and variadic action bounds."""
+    rng = np.random.default_rng(seed)
+    layer_sizes = (4, 5, 3, 2)
+    nodes = []
+    initializers = []
+    previous = "observation"
+
+    for index, (input_size, output_size) in enumerate(zip(layer_sizes, layer_sizes[1:])):
+        weight = (rng.standard_normal((output_size, input_size)) * 0.3).astype(np.float32)
+        bias = (rng.standard_normal((output_size,)) * 0.05).astype(np.float32)
+        weight_name, bias_name = f"W{index}", f"b{index}"
+        initializers.extend(
+            [
+                numpy_helper.from_array(weight, name=weight_name),
+                numpy_helper.from_array(bias, name=bias_name),
+            ]
+        )
+        linear_output = "raw_action" if index == len(layer_sizes) - 2 else f"hidden{index}"
+        nodes.append(
+            helper.make_node(
+                "Gemm",
+                [previous, weight_name, bias_name],
+                [linear_output],
+                alpha=1.0,
+                beta=1.0,
+                transB=1,
+            )
+        )
+        if index < len(layer_sizes) - 2:
+            previous = f"activated{index}"
+            nodes.append(helper.make_node("Elu", [linear_output], [previous]))
+
+    initializers.extend(
+        [
+            numpy_helper.from_array(np.array([-0.5, -0.25], dtype=np.float32), name="lower"),
+            numpy_helper.from_array(np.array(0.4, dtype=np.float32), name="upper_scalar"),
+            numpy_helper.from_array(np.array([[0.35, 0.3]], dtype=np.float32), name="upper_vector"),
+        ]
+    )
+    nodes.extend(
+        [
+            helper.make_node("Max", ["raw_action", "lower"], ["lower_bounded"]),
+            helper.make_node("Min", ["lower_bounded", "upper_scalar", "upper_vector"], ["action"]),
+        ]
+    )
+
+    observation = helper.make_tensor_value_info("observation", TensorProto.FLOAT, [batch, layer_sizes[0]])
+    action = helper.make_tensor_value_info("action", TensorProto.FLOAT, [batch, layer_sizes[-1]])
+    graph = helper.make_graph(nodes, "clipped_policy", [observation], [action], initializer=initializers)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    return model
+
+
 def _lstm_step_reference(
     x: np.ndarray,
     h_prev: np.ndarray,
@@ -299,6 +364,110 @@ def test_mlp_policy(device):
                 rtol=1e-3,
                 atol=1e-4,
             )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_min_max_policy(device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    model = _build_clipped_policy_model(batch=3, seed=20260812)
+    rng = np.random.default_rng(20260812)
+    observation = rng.standard_normal((3, 4)).astype(np.float32)
+    expected = _run_numpy_mlp(model, {"observation": observation})
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        runtime = OnnxRuntime(str(path), device=device, batch_size=3)
+        output = runtime({"observation": wp.array(observation, dtype=wp.float32, device=device)})
+        check_arrays(
+            output["action"],
+            wp.array(expected["action"], dtype=wp.float32, device=device),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_min_max_policy_input_gradients(device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    model = _build_clipped_policy_model(seed=20260812)
+    observation = np.array([[0.2, -0.1, 0.3, -0.2]], dtype=np.float32)
+    seed = np.ones((1, 2), dtype=np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        runtime = OnnxRuntime(str(path), device=device, requires_grad=True)
+        actual = _runtime_input_gradient(
+            runtime,
+            {"observation": observation},
+            input_name="observation",
+            output_name="action",
+            seed=seed,
+            device=device,
+        )
+
+        def fwd(x):
+            output = _run_numpy_mlp(model, {"observation": x})["action"]
+            return float(np.sum(output * seed))
+
+        expected = _finite_difference_gradient(fwd, observation)
+        check_arrays(
+            wp.array(actual, dtype=wp.float32, device=device),
+            wp.array(expected, dtype=wp.float32, device=device),
+            rtol=1e-2,
+            atol=1e-3,
+        )
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("device", ["cuda"])
+def test_min_max_policy_graph_capture_replay(device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    model = _build_clipped_policy_model(batch=2, seed=20260812)
+    rng = np.random.default_rng(20260812)
+    observation_np = rng.standard_normal((2, 4)).astype(np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        runtime = OnnxRuntime(str(path), device=device, batch_size=2)
+        observation = wp.array(observation_np, dtype=wp.float32, device=device)
+        runtime({"observation": observation})
+
+        wp.capture_begin(device=device)
+        try:
+            output = runtime({"observation": observation})
+            graph = wp.capture_end(device=device)
+        except Exception:
+            wp.capture_end(device=device)
+            raise
+
+        replay_observation = rng.standard_normal((2, 4)).astype(np.float32)
+        observation.assign(replay_observation)
+        wp.capture_launch(graph)
+
+        expected = _run_numpy_mlp(model, {"observation": replay_observation})
+        check_arrays(
+            output["action"],
+            wp.array(expected["action"], dtype=wp.float32, device=device),
+            rtol=1e-5,
+            atol=1e-6,
+        )
     finally:
         path.unlink(missing_ok=True)
 

@@ -34,6 +34,8 @@ Supported ONNX operators (all graph-capturable after one warmup call):
 * **Gemm** -- ``C = alpha * A @ B.T + beta * bias`` with ``transB=1``
 * **Elu**, **Relu**, **Sqrt**, **Tanh** -- elementwise activation/math
 * **ReduceMean** -- 2-D row reduction with ``keepdims=1``
+* **Max**, **Min** -- variadic element-wise operations with multidirectional
+  broadcasting for policy tensors with rank up to 2 and a rank-2 result
 * **Squeeze** -- alias passthrough (the output array shares memory with the
   input). Only used to drop unit dims, no copy is performed.
 * **LSTM** -- forward, single-direction, single-layer, ``seq_length=1``. The
@@ -228,6 +230,44 @@ def _create_rms_normalization_kernel(width: int):
         wp.tile_store(output, values * inverse_rms * scales, offset=(row, 0))
 
     return kernel
+
+
+@wp.kernel
+def _broadcast_max_kernel(
+    x: wp.array[float],
+    y: wp.array[float],
+    output: wp.array[float],
+    x_rows: int,
+    x_cols: int,
+    y_rows: int,
+    y_cols: int,
+    output_cols: int,
+):
+    i, j = wp.tid()
+    x_i = 0 if x_rows == 1 else i
+    x_j = 0 if x_cols == 1 else j
+    y_i = 0 if y_rows == 1 else i
+    y_j = 0 if y_cols == 1 else j
+    output[i * output_cols + j] = wp.max(x[x_i * x_cols + x_j], y[y_i * y_cols + y_j])
+
+
+@wp.kernel
+def _broadcast_min_kernel(
+    x: wp.array[float],
+    y: wp.array[float],
+    output: wp.array[float],
+    x_rows: int,
+    x_cols: int,
+    y_rows: int,
+    y_cols: int,
+    output_cols: int,
+):
+    i, j = wp.tid()
+    x_i = 0 if x_rows == 1 else i
+    x_j = 0 if x_cols == 1 else j
+    y_i = 0 if y_rows == 1 else i
+    y_j = 0 if y_cols == 1 else j
+    output[i * output_cols + j] = wp.min(x[x_i * x_cols + x_j], y[y_i * y_cols + y_j])
 
 
 @wp.kernel
@@ -679,6 +719,44 @@ def _shape_rms_normalization(op, shapes, tensors, device, requires_grad=False):
     shapes[op.outputs[0]] = shape
 
 
+def _shape_variadic_elementwise(op, shapes, tensors, device, requires_grad=False):
+    input_shapes = [shapes[name] for name in op.inputs]
+    if not input_shapes:
+        raise ValueError(f"OnnxRuntime {op.op_type}: at least one input is required")
+    if any(len(shape) > 2 for shape in input_shapes):
+        raise NotImplementedError(f"OnnxRuntime {op.op_type}: only tensors with rank up to 2 are supported")
+    try:
+        output_shape = np.broadcast_shapes(*input_shapes)
+    except ValueError as exc:
+        raise ValueError(f"OnnxRuntime {op.op_type}: input shapes {input_shapes} are not broadcastable") from exc
+    if len(output_shape) != 2:
+        raise NotImplementedError(
+            f"OnnxRuntime {op.op_type}: only operations producing a 2-D tensor are supported (got {output_shape})"
+        )
+
+    normalized_shapes = []
+    for shape in input_shapes:
+        if len(shape) == 0:
+            normalized_shapes.append((1, 1))
+        elif len(shape) == 1:
+            normalized_shapes.append((1, shape[0]))
+        else:
+            normalized_shapes.append(shape)
+
+    buffers = [
+        wp.zeros(output_shape, dtype=wp.float32, device=device, requires_grad=requires_grad)
+        for _ in range(len(op.inputs) - 1)
+    ]
+    if buffers:
+        tensors[op.outputs[0]] = buffers[-1]
+    shapes[op.outputs[0]] = output_shape
+    op.attrs["_cache"] = {
+        "buffers": buffers,
+        "input_shapes": normalized_shapes,
+        "output_shape": output_shape,
+    }
+
+
 def _shape_squeeze(op, shapes, tensors, device, requires_grad=False):
     in_shape = shapes[op.inputs[0]]
     axes = None
@@ -926,6 +1004,41 @@ def _exec_rms_normalization(op, tensors, shapes, device):
     )
 
 
+def _exec_variadic_elementwise(op, tensors, shapes, device):
+    cache = op.attrs["_cache"]
+    buffers = cache["buffers"]
+    if not buffers:
+        tensors[op.outputs[0]] = tensors[op.inputs[0]]
+        return
+
+    output_shape = cache["output_shape"]
+    output_rows, output_cols = output_shape
+    kernel = _broadcast_max_kernel if op.op_type == "Max" else _broadcast_min_kernel
+    left = tensors[op.inputs[0]]
+    left_shape = cache["input_shapes"][0]
+    for index, input_name in enumerate(op.inputs[1:]):
+        right = tensors[input_name]
+        right_shape = cache["input_shapes"][index + 1]
+        output = buffers[index]
+        wp.launch(
+            kernel,
+            dim=output_shape,
+            inputs=[
+                left.reshape((left.size,)),
+                right.reshape((right.size,)),
+                output.reshape((output.size,)),
+                left_shape[0],
+                left_shape[1],
+                right_shape[0],
+                right_shape[1],
+                output_cols,
+            ],
+            device=device,
+        )
+        left = output
+        left_shape = (output_rows, output_cols)
+
+
 def _exec_squeeze(op, tensors, shapes, device):
     src = tensors[op.inputs[0]]
     out_shape = op.attrs["_out_shape"]
@@ -986,6 +1099,8 @@ _OP_DISPATCH: dict[str, Any] = {
     "Elu": _exec_elu,
     "Gemm": _exec_gemm,
     "LSTM": _exec_lstm,
+    "Max": _exec_variadic_elementwise,
+    "Min": _exec_variadic_elementwise,
     "Mul": _exec_binary,
     "ReduceMean": _exec_reduce_mean,
     "Relu": _exec_unary,
@@ -1004,6 +1119,8 @@ _SHAPE_DISPATCH: dict[str, Any] = {
     "Elu": _shape_elementwise_unary,
     "Gemm": _shape_gemm,
     "LSTM": _shape_lstm,
+    "Max": _shape_variadic_elementwise,
+    "Min": _shape_variadic_elementwise,
     "Mul": _shape_elementwise_binary,
     "ReduceMean": _shape_reduce_mean,
     "Relu": _shape_elementwise_unary,

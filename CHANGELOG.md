@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- Add `Max` and `Min` support to the ONNX inference runtime
+
 ## [0.3.1] - 2026-07-28
 ### Changed
 - Update the ONNX inference runtime to include opt-in support for gradient propagation
