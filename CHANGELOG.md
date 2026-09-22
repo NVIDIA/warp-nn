@@ -3,6 +3,10 @@
 ## [Unreleased]
 ### Added
 - Add `Max` and `Min` support to the ONNX inference runtime
+- Add the `requires_grad` constructor argument to modules that own parameters and/or cached output arrays,
+  to control whether those arrays require gradients
+- Add the `initialize_parameters` constructor argument to layers that own parameters,
+  to control whether those parameters are initialized with their default/initial values
 
 ## [0.3.1] - 2026-07-28
 ### Changed

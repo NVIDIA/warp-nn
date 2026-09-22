@@ -77,6 +77,8 @@ class Conv1D(Module):
         dilation: int = 1,
         groups: int = 1,
         bias: bool = True,
+        initialize_parameters: bool = True,
+        requires_grad: bool = True,
     ):
         r"""Apply a 1D convolution.
 
@@ -118,8 +120,12 @@ class Conv1D(Module):
         :param groups: The number of groups.
             Both, the ``in_channels`` and the ``out_channels`` arguments must be divisible by ``groups``.
         :param bias: Whether to include a bias term.
+        :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
+            If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
+            before loading their values (e.g. from a state dictionary) is undefined behavior.
+        :param requires_grad: Whether the parameters and the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = expand_tuple(kernel_size, length=1)
@@ -133,18 +139,23 @@ class Conv1D(Module):
         # - weight
         shape = (self.out_channels, self.in_channels // self.groups, self.kernel_size[0])
         self.weight = self.register_parameter(
-            "weight", Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device))
+            "weight",
+            Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device), requires_grad=self.requires_grad),
         )
         # - bias
         if bias:
             shape = (self.out_channels, 1)
             self.bias = self.register_parameter(
-                "bias", Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device))
+                "bias",
+                Parameter(
+                    wp.empty(shape=shape, dtype=wp.float32, device=self.device), requires_grad=self.requires_grad
+                ),
             )
         else:
             self.bias = None
         # set default/initial values
-        self._initialize_parameters()
+        if initialize_parameters:
+            self._initialize_parameters()
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
@@ -195,7 +206,7 @@ class Conv1D(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         # launch kernel
         wp.launch(

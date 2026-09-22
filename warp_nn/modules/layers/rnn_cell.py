@@ -55,7 +55,15 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
 
 
 class RNNCell(Module):
-    def __init__(self, input_size: int, hidden_size: int, *, bias: bool = True):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        *,
+        bias: bool = True,
+        initialize_parameters: bool = True,
+        requires_grad: bool = True,
+    ):
         r"""Apply a Elman's Recurrent Neural Network (RNN) cell.
 
         .. math::
@@ -98,39 +106,55 @@ class RNNCell(Module):
         :param input_size: The number of input features.
         :param hidden_size: The number of hidden features.
         :param bias: Whether to include a bias term.
+        :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
+            If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
+            before loading their values (e.g. from a state dictionary) is undefined behavior.
+        :param requires_grad: Whether the parameters and the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         self.input_size = input_size
         self.hidden_size = hidden_size
         # create/register parameters
         # - weights
         self.weight_ih = Parameter(
-            wp.empty(shape=(self.hidden_size, self.input_size), dtype=wp.float32, device=self.device)
+            wp.empty(shape=(self.hidden_size, self.input_size), dtype=wp.float32, device=self.device),
+            requires_grad=self.requires_grad,
         )
         self.weight_hh = Parameter(
-            wp.empty(shape=(self.hidden_size, self.hidden_size), dtype=wp.float32, device=self.device)
+            wp.empty(shape=(self.hidden_size, self.hidden_size), dtype=wp.float32, device=self.device),
+            requires_grad=self.requires_grad,
         )
         self.register_parameter(name="weight_ih", parameter=self.weight_ih)
         self.register_parameter(name="weight_hh", parameter=self.weight_hh)
         # - biases
         if bias:
-            self.bias_ih = Parameter(wp.empty(shape=(self.hidden_size, 1), dtype=wp.float32, device=self.device))
-            self.bias_hh = Parameter(wp.empty(shape=(self.hidden_size, 1), dtype=wp.float32, device=self.device))
+            self.bias_ih = Parameter(
+                wp.empty(shape=(self.hidden_size, 1), dtype=wp.float32, device=self.device),
+                requires_grad=self.requires_grad,
+            )
+            self.bias_hh = Parameter(
+                wp.empty(shape=(self.hidden_size, 1), dtype=wp.float32, device=self.device),
+                requires_grad=self.requires_grad,
+            )
             self.register_parameter(name="bias_ih", parameter=self.bias_ih)
             self.register_parameter(name="bias_hh", parameter=self.bias_hh)
         else:
             self.bias_ih = None
             self.bias_hh = None
         # set default/initial values
+        if initialize_parameters:
+            self._initialize_parameters()
+        # runtime variables
+        self._cache = {}
+        self._config = get_kernel_config()
+        self._kernel = _create_kernels(self._config, include_bias=self.bias_ih is not None)
+
+    def _initialize_parameters(self):
         kaiming_uniform(self.weight_ih.data, mode="scale", scale=1.0 / self.hidden_size)
         kaiming_uniform(self.weight_hh.data, mode="scale", scale=1.0 / self.hidden_size)
         if self.bias_ih:
             kaiming_uniform(self.bias_ih.data, mode="scale", scale=1.0 / self.hidden_size)
             kaiming_uniform(self.bias_hh.data, mode="scale", scale=1.0 / self.hidden_size)
-        # runtime variables
-        self._cache = {}
-        self._config = get_kernel_config()
-        self._kernel = _create_kernels(self._config, include_bias=self.bias_ih is not None)
 
     def __call__(self, input: wp.array, hidden: wp.array) -> wp.array:
         """Forward pass of the module.
@@ -145,7 +169,7 @@ class RNNCell(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         # launch kernel
         wp.launch_tiled(

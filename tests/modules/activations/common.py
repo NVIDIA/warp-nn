@@ -81,3 +81,18 @@ def check_gradients(*, warp_activation, torch_activation, device, dtype, ndim):
     tape.backward(loss)
     # check gradients
     utilities.check_arrays(torch_input.grad, warp_input.grad)
+
+
+def check_requires_grad(*, warp_activation, device, ndim, requires_grad: bool):
+    # move activation to target device
+    warp_activation.to(device)
+    # create inputs
+    array = utilities.sample_array(shape=[10] * ndim)
+    warp_input = wp.array(array, device=device, requires_grad=True)
+    # forward pass
+    warp_output = warp_activation(warp_input)
+    # check the flag of the activation and of its cached output array
+    assert warp_activation.requires_grad == requires_grad
+    assert warp_output.requires_grad == requires_grad
+    # check that the gradient array of the cached output array is allocated accordingly
+    assert (warp_output.grad is not None) == requires_grad

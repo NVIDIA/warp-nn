@@ -24,7 +24,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward_rnn_cell
+from .common import check_forward_rnn_cell, check_initialize_parameters, check_requires_grad
 
 
 @hypothesis.given(
@@ -56,4 +56,37 @@ def test_forward(capsys, device, dtype, ndim, bias, batch_size, input_size, hidd
         shape=[sequence_length, batch_size, input_size],
         hidden_shape=[batch_size, hidden_size],
         cell_shape=None,
+    )
+
+
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_requires_grad(capsys, device, requires_grad, bias):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_requires_grad(
+        warp_module=nn.GRUCell(input_size=8, hidden_size=4, bias=bias, requires_grad=requires_grad),
+        device=device,
+        inputs=[
+            wp.array(utilities.sample_array([2, 8]), device=device, requires_grad=True),
+            wp.array(utilities.sample_array([2, 4]), device=device, requires_grad=True),
+        ],
+        requires_grad=requires_grad,
+    )
+
+
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_initialize_parameters(capsys, device, bias):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_initialize_parameters(
+        module_type=nn.GRUCell,
+        module_kwargs={"input_size": 8, "hidden_size": 4, "bias": bias},
+        device=device,
     )

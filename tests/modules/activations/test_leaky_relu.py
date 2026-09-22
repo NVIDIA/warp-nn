@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients
+from .common import check_forward, check_gradients, check_requires_grad
 
 
 # module-specific parameters
@@ -58,4 +58,17 @@ def test_gradients(capsys, device, dtype, ndim, negative_slope):
         device=device,
         dtype=dtype,
         ndim=ndim,
+    )
+
+
+# module-specific parameters
+@pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("ndim", [2])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_requires_grad(capsys, device, ndim, requires_grad):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_requires_grad(
+        warp_activation=nn.LeakyReLU(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )

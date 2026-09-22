@@ -57,7 +57,7 @@ def _create_kernels(config: KernelConfig):
 
 
 class SELU(Module):
-    def __init__(self) -> None:
+    def __init__(self, *, requires_grad: bool = True) -> None:
         r"""Scaled Exponential Linear Unit (SELU) activation function.
 
         This class computes the element-wise SELU activation function:
@@ -75,8 +75,10 @@ class SELU(Module):
 
             \lambda = 1.0507009873554804934193349852946 \\
             \alpha = 1.6732632423543772848170429916717
+
+        :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
@@ -94,7 +96,7 @@ class SELU(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         kernel = self._kernels[(len(shape), dtype)]
         # launch kernel

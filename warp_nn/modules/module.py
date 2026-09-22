@@ -28,7 +28,7 @@ from warp_nn.utils import parse_device
 
 
 class Module(ABC):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, requires_grad: bool = True, **kwargs):
         """Base abstract class for all the modules.
 
         Modules can contain other modules (sub-modules), organized in a nested tree structure.
@@ -39,7 +39,12 @@ class Module(ABC):
             Sub-modules assigned as regular attributes to the parent module are not registered automatically.
             Therefore, it is necessary to call the :py:meth:`__post_init__` method before exiting the
             initialization of the module (i.e. at the end of the class constructor).
+
+        :param args: Additional positional arguments.
+        :param requires_grad: Whether the parameters and the cached output arrays of the module require gradients.
+        :param kwargs: Additional keyword arguments.
         """
+        self._requires_grad: bool = requires_grad
         if not hasattr(self, "_device"):
             self._device: wp.Device = parse_device(None)
         if not hasattr(self, "_modules"):
@@ -73,6 +78,11 @@ class Module(ABC):
     def device(self) -> wp.Device:
         """Device on which the module is allocated."""
         return self._device
+
+    @property
+    def requires_grad(self) -> bool:
+        """Whether the parameters and the cached output arrays of the module require gradients."""
+        return self._requires_grad
 
     def register_parameter(self, name: str, parameter: Parameter) -> Parameter:
         """Register a parameter to the module.

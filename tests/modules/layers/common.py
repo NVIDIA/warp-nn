@@ -17,6 +17,7 @@ from typing import Any
 
 import torch
 
+import numpy as np
 import warp as wp
 
 from ... import utilities
@@ -158,3 +159,44 @@ def check_gradients(*, warp_module, torch_module, device, dtype, shape, rtol: fl
         rtol=rtol,
         atol=atol,
     )
+
+
+def check_requires_grad(*, warp_module, device, inputs, requires_grad: bool):
+    # move module to target device
+    warp_module.to(device)
+    # forward pass
+    warp_outputs = warp_module(*inputs)
+    # check the flag of the module, of its parameters and of its cached output arrays,
+    # as well as the allocation of the corresponding gradient arrays
+    assert warp_module.requires_grad == requires_grad
+    for parameter in warp_module.parameters(as_array=False):
+        assert parameter.requires_grad == requires_grad
+        assert (parameter.data.grad is not None) == requires_grad
+    for warp_output in warp_outputs if isinstance(warp_outputs, tuple) else (warp_outputs,):
+        assert warp_output.requires_grad == requires_grad
+        assert (warp_output.grad is not None) == requires_grad
+
+
+def check_initialize_parameters(*, module_type, module_kwargs: dict, device, inputs: list | None = None):
+    def _create(initialize_parameters: bool):
+        module = module_type(**module_kwargs, initialize_parameters=initialize_parameters).to(device)
+        if inputs is not None:  # materialize the parameters of the lazily initialized modules
+            module(*inputs)
+        return module
+
+    def _check_same_parameters(a, b):
+        utilities.check_arrays(a.parameters(as_array=True), b.parameters(as_array=True), flatten=True, test="equal")
+
+    # the parameters are drawn from the global NumPy random number generator, so seeding it makes them reproducible
+    state = np.random.get_state()
+    try:
+        np.random.seed(0)
+        reference = _create(initialize_parameters=True)
+        np.random.seed(0)
+        _check_same_parameters(reference, _create(initialize_parameters=True))
+        # skipping the initialization draws nothing, so the next initialized module still gets the same parameters
+        np.random.seed(0)
+        _create(initialize_parameters=False)
+        _check_same_parameters(reference, _create(initialize_parameters=True))
+    finally:
+        np.random.set_state(state)

@@ -46,7 +46,15 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
 
 
 class Linear(Module):
-    def __init__(self, in_features: int, out_features: int, *, bias: bool = True):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        bias: bool = True,
+        initialize_parameters: bool = True,
+        requires_grad: bool = True,
+    ):
         r"""Apply a linear transformation over the final dimension of the input.
 
         .. math::
@@ -81,26 +89,35 @@ class Linear(Module):
         :param in_features: The number of input features.
         :param out_features: The number of output features.
         :param bias: Whether to include a bias term.
+        :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
+            If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
+            before loading their values (e.g. from a state dictionary) is undefined behavior.
+        :param requires_grad: Whether the parameters and the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         self.in_features = in_features
         self.out_features = out_features
         # create/register parameters
         # - weight
         shape = (self.out_features, self.in_features)
         self.weight = self.register_parameter(
-            "weight", Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device))
+            "weight",
+            Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device), requires_grad=self.requires_grad),
         )
         # - bias
         if bias:
             shape = (self.out_features, 1)
             self.bias = self.register_parameter(
-                "bias", Parameter(wp.empty(shape=shape, dtype=wp.float32, device=self.device))
+                "bias",
+                Parameter(
+                    wp.empty(shape=shape, dtype=wp.float32, device=self.device), requires_grad=self.requires_grad
+                ),
             )
         else:
             self.bias = None
         # set default/initial values
-        self._initialize_parameters()
+        if initialize_parameters:
+            self._initialize_parameters()
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
@@ -123,7 +140,7 @@ class Linear(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         # launch kernel
         wp.launch_tiled(
@@ -138,13 +155,40 @@ class Linear(Module):
 
 
 class LazyLinear(Linear):
-    def __init__(self, out_features: int, bias: bool = True):
+    def __init__(
+        self,
+        out_features: int,
+        bias: bool = True,
+        *,
+        initialize_parameters: bool = True,
+        requires_grad: bool = True,
+    ):
+        """Apply a linear transformation whose ``in_features`` is inferred from the first input.
+
+        See :py:class:`~warp_nn.modules.layers.linear.Linear` for details.
+
+        :param out_features: The number of output features.
+        :param bias: Whether to include a bias term.
+        :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
+            If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
+            before loading their values (e.g. from a state dictionary) is undefined behavior.
+        :param requires_grad: Whether the parameters and the cached output arrays of the module require gradients.
+        """
+        # initialize the base class only, since the parameters are created on the first forward pass
+        Module.__init__(self, requires_grad=requires_grad)
         self._out_features = out_features
         self._bias = bias
+        self._initialize_parameters_on_build = initialize_parameters
         self._initialized = False
 
     def __call__(self, input: wp.array) -> wp.array:
         if not self._initialized:
-            super().__init__(in_features=input.shape[1], out_features=self._out_features, bias=self._bias)
+            super().__init__(
+                in_features=input.shape[1],
+                out_features=self._out_features,
+                bias=self._bias,
+                initialize_parameters=self._initialize_parameters_on_build,
+                requires_grad=self.requires_grad,
+            )
             self._initialized = True
         return super().__call__(input)

@@ -58,7 +58,7 @@ def _create_kernels(config: KernelConfig, *, alpha: float):
 
 
 class ELU(Module):
-    def __init__(self, *, alpha: float = 1.0) -> None:
+    def __init__(self, *, alpha: float = 1.0, requires_grad: bool = True) -> None:
         r"""Exponential Linear Unit (ELU) activation function.
 
         This class computes the element-wise ELU activation function:
@@ -71,8 +71,9 @@ class ELU(Module):
             \end{cases}
 
         :param alpha: The alpha value for the ELU function.
+        :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         self._alpha = alpha
         # runtime variables
         self._cache = {}
@@ -96,7 +97,7 @@ class ELU(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         kernel = self._kernels[(len(shape), dtype)]
         # launch kernel

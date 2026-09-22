@@ -24,7 +24,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward, check_gradients
+from .common import check_forward, check_gradients, check_initialize_parameters, check_requires_grad
 
 
 @hypothesis.given(
@@ -169,4 +169,34 @@ def test_gradients(
         device=device,
         dtype=dtype,
         shape=[batch_size, in_channels, in_signal_length],
+    )
+
+
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_requires_grad(capsys, device, requires_grad, bias):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_requires_grad(
+        warp_module=nn.Conv1D(in_channels=3, out_channels=6, kernel_size=3, bias=bias, requires_grad=requires_grad),
+        device=device,
+        inputs=[wp.array(utilities.sample_array([2, 3, 10]), device=device, requires_grad=True)],
+        requires_grad=requires_grad,
+    )
+
+
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_initialize_parameters(capsys, device, bias):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_initialize_parameters(
+        module_type=nn.Conv1D,
+        module_kwargs={"in_channels": 3, "out_channels": 6, "kernel_size": 3, "bias": bias},
+        device=device,
     )

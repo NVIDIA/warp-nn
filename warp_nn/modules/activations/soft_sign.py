@@ -53,7 +53,7 @@ def _create_kernels(config: KernelConfig):
 
 
 class SoftSign(Module):
-    def __init__(self) -> None:
+    def __init__(self, *, requires_grad: bool = True) -> None:
         r"""Soft-sign activation function.
 
         This class computes the element-wise soft-sign activation function:
@@ -61,8 +61,10 @@ class SoftSign(Module):
         .. math::
 
             \text{SoftSign}(x) = \frac{x}{1 + |x|}
+
+        :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
-        super().__init__()
+        super().__init__(requires_grad=requires_grad)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
@@ -80,7 +82,7 @@ class SoftSign(Module):
         key = (shape, dtype)
         # cache output
         if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
+            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
         kernel = self._kernels[(len(shape), dtype)]
         # launch kernel
