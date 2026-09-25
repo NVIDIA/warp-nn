@@ -18,9 +18,7 @@ from typing import Any
 import warp as wp
 
 from warp_nn.modules.module import Module
-from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
-
-from ._common import overload_kernels
+from warp_nn.utils import KernelConfig, get_kernel_config, overload_kernels, resolve_dim
 
 
 def _create_kernels(config: KernelConfig, *, alpha: float):
@@ -32,27 +30,27 @@ def _create_kernels(config: KernelConfig, *, alpha: float):
 
     @wp.kernel
     def kernel_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
-        wp.static(alpha)  # hack to force kernel specialization
         i = wp.tid()
         shape = (wp.static(config.tile_1d[0]),)
         offset = (i * wp.static(config.tile_1d[0]),)
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
+        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
+        wp.tile_store(output, tile, offset=offset)
 
     @wp.kernel
     def kernel_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
-        wp.static(alpha)  # hack to force kernel specialization
         i, j = wp.tid()
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
+        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
+        wp.tile_store(output, tile, offset=offset)
 
     @wp.kernel
     def kernel_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
-        wp.static(alpha)  # hack to force kernel specialization
         i, j, k = wp.tid()
         shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))
         offset = (i * wp.static(config.tile_3d[0]), j * wp.static(config.tile_3d[1]), k * wp.static(config.tile_3d[2]))
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
+        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
+        wp.tile_store(output, tile, offset=offset)
 
     return overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d])
 

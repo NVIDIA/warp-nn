@@ -53,7 +53,7 @@ Dependencies
 
 The following required dependencies will be installed automatically:
 
-* `warp-lang <https://nvidia.github.io/warp>`_ ``>= 1.12.0``
+* `warp-lang <https://nvidia.github.io/warp>`_ ``>= 1.15.0``
 
 Supported Platforms and Requirements
 ------------------------------------

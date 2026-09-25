@@ -67,7 +67,7 @@ jobs:
         python -m pip install --quiet --upgrade pip
         python -m pip install --quiet "numpy<2.0"
         python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-        python -m pip install --quiet warp-lang==1.12.0
+        python -m pip install --quiet warp-lang==1.15.0
         python -m pip install --quiet -e .[tests]
         python -m pip list
     # run tests

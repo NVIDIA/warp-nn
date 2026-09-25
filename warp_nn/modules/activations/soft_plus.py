@@ -18,9 +18,7 @@ from typing import Any
 import warp as wp
 
 from warp_nn.modules.module import Module
-from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
-
-from ._common import overload_kernels
+from warp_nn.utils import KernelConfig, get_kernel_config, overload_kernels, resolve_dim
 
 
 def _create_kernels(config: KernelConfig):

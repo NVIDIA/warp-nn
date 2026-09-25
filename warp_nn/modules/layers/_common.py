@@ -13,20 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable
-
 import warp as wp
-
-
-def overload_kernels(*, kernels: list[Callable], dtypes: list[type] = [wp.float16, wp.float32, wp.float64]):
-    _kernels = {}
-    for i, kernel in enumerate(kernels):
-        for dtype in dtypes:
-            ndim = i + 1
-            _kernels[(ndim, dtype)] = wp.overload(
-                kernel, [wp.array(ndim=ndim, dtype=dtype), wp.array(ndim=ndim, dtype=dtype)]
-            )
-    return _kernels
 
 
 def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...]:

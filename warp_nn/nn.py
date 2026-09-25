@@ -13,7 +13,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from warp_nn.modules.activations import ELU, SELU, LeakyReLU, ReLU, Sigmoid, SoftPlus, SoftSign, Tanh
-from warp_nn.modules.layers import Conv1D, Conv2D, Flatten, GRUCell, LazyLinear, Linear, LSTMCell, RNNCell, Sequential
+from warp_nn.modules.activations import (
+    CELU,
+    ELU,
+    GELU,
+    SELU,
+    HardSigmoid,
+    LeakyReLU,
+    LogSoftmax,
+    ReLU,
+    Shrink,
+    Sigmoid,
+    Softmax,
+    SoftPlus,
+    SoftSign,
+    Swish,
+    Tanh,
+    Threshold,
+)
+from warp_nn.modules.buffer import Buffer
+from warp_nn.modules.layers import (
+    AvgPool1D,
+    AvgPool2D,
+    BatchNorm,
+    Conv1D,
+    Conv2D,
+    Dropout,
+    Flatten,
+    GlobalAvgPool,
+    GlobalMaxPool,
+    GroupNorm,
+    GRUCell,
+    InstanceNorm,
+    LayerNorm,
+    LazyLinear,
+    Linear,
+    LSTMCell,
+    MaxPool1D,
+    MaxPool2D,
+    RMSNorm,
+    RNNCell,
+    Sequential,
+)
 from warp_nn.modules.module import Module
+from warp_nn.modules.operators import BinaryOp, BinaryOpKind, Clip, UnaryOp, UnaryOpKind
 from warp_nn.modules.parameter import Parameter

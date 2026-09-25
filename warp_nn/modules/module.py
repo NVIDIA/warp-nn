@@ -23,6 +23,7 @@ from collections import OrderedDict
 import numpy as np
 import warp as wp
 
+from warp_nn.modules.buffer import Buffer
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import parse_device
 
@@ -47,25 +48,31 @@ class Module(ABC):
         self._requires_grad: bool = requires_grad
         if not hasattr(self, "_device"):
             self._device: wp.Device = parse_device(None)
+        if not hasattr(self, "_training"):
+            self._training: bool = True
         if not hasattr(self, "_modules"):
             self._modules: OrderedDict[str, Module] = OrderedDict()
         if not hasattr(self, "_parameters"):
             self._parameters: OrderedDict[str, Parameter] = OrderedDict()
+        if not hasattr(self, "_buffers"):
+            self._buffers: OrderedDict[str, Buffer] = OrderedDict()
 
     def __post_init__(self) -> None:
-        """Register sub-modules and parameters.
+        """Register sub-modules, parameters and buffers.
 
         .. important::
 
-            A module subclass must call this method to register sub-modules and parameters assigned as regular
-            attributes to it, unless they have already been registered manually.
+            A module subclass must call this method to register sub-modules, parameters and buffers assigned as
+            regular attributes to it, unless they have already been registered manually.
         """
-        # register modules and parameters
+        # register modules, parameters and buffers
         for k, v in self.__dict__.items():
             if isinstance(v, Module):
                 self.register_module(k, v)
             elif isinstance(v, Parameter):
                 self.register_parameter(k, v)
+            elif isinstance(v, Buffer):
+                self.register_buffer(k, v)
 
     def __call__(self, *args, **kwargs) -> Any:
         """Forward pass of the module.
@@ -84,26 +91,35 @@ class Module(ABC):
         """Whether the parameters and the cached output arrays of the module require gradients."""
         return self._requires_grad
 
-    def register_parameter(self, name: str, parameter: Parameter) -> Parameter:
-        """Register a parameter to the module.
+    @property
+    def training(self) -> bool:
+        """Whether the module is in training mode (true) or in evaluation mode (false)."""
+        return self._training
 
-        The parameters will be registered in the order that this method is called.
+    def train(self, mode: bool = True) -> Module:
+        """Set the module and its registered sub-modules in training or evaluation mode.
 
-        :param name: The name of the parameter.
-        :param parameter: The parameter to register.
+        The mode only affects modules that behave differently during training and evaluation
+        (e.g. :py:class:`~warp_nn.modules.layers.Dropout` or :py:class:`~warp_nn.modules.layers.BatchNorm`).
+        Modules are in training mode by default.
 
-        :return: The parameter itself.
+        :param mode: Whether to set training mode (true) or evaluation mode (false).
 
-        raises:
-            TypeError: If the parameter is not a Parameter subclass.
-            KeyError: If the parameter with the same name already exists.
+        :return: The module itself.
         """
-        if not isinstance(parameter, Parameter):
-            raise TypeError(f"Class '{type(parameter).__name__}' is not a Parameter subclass")
-        if name in self._parameters:
-            raise KeyError(f"Parameter with name '{name}' already exists")
-        self._parameters[name] = parameter
-        return parameter
+        self._training = mode
+        for module in self._modules.values():
+            module.train(mode)
+        return self
+
+    def eval(self) -> Module:
+        """Set the module and its registered sub-modules in evaluation mode.
+
+        This is equivalent to ``module.train(False)``.
+
+        :return: The module itself.
+        """
+        return self.train(False)
 
     def register_module(self, name: str, module: Module) -> Module:
         """Register a module to the module.
@@ -125,6 +141,70 @@ class Module(ABC):
             raise KeyError(f"Module with name '{name}' already exists")
         self._modules[name] = module
         return module
+
+    def register_parameter(self, name: str, parameter: Parameter) -> Parameter:
+        """Register a parameter to the module.
+
+        The parameters will be registered in the order that this method is called.
+
+        :param name: The name of the parameter.
+        :param parameter: The parameter to register.
+
+        :return: The parameter itself.
+
+        raises:
+            TypeError: If the parameter is not a Parameter subclass.
+            KeyError: If a parameter or buffer with the same name already exists.
+        """
+        if not isinstance(parameter, Parameter):
+            raise TypeError(f"Class '{type(parameter).__name__}' is not a Parameter subclass")
+        if name in self._parameters:
+            raise KeyError(f"Parameter with name '{name}' already exists")
+        if name in self._buffers:
+            raise KeyError(f"Buffer with name '{name}' already exists")
+        self._parameters[name] = parameter
+        return parameter
+
+    def register_buffer(self, name: str, buffer: Buffer) -> Buffer:
+        """Register a buffer to the module.
+
+        The buffers will be registered in the order that this method is called.
+
+        :param name: The name of the buffer.
+        :param buffer: The buffer to register.
+
+        :return: The buffer itself.
+
+        raises:
+            TypeError: If the buffer is not a Buffer subclass.
+            KeyError: If a buffer or parameter with the same name already exists.
+        """
+        if not isinstance(buffer, Buffer):
+            raise TypeError(f"Class '{type(buffer).__name__}' is not a Buffer subclass")
+        if name in self._buffers:
+            raise KeyError(f"Buffer with name '{name}' already exists")
+        if name in self._parameters:
+            raise KeyError(f"Parameter with name '{name}' already exists")
+        self._buffers[name] = buffer
+        return buffer
+
+    def modules(self) -> list[Module]:
+        """Get the registered modules.
+
+        The modules will be returned in the order that they were registered.
+
+        :return: A list of modules.
+        """
+        return self._modules.values()
+
+    def named_modules(self) -> list[str, Module]:
+        """Get the registered modules and their names.
+
+        The modules will be returned in the order that they were registered.
+
+        :return: A tuple of (name, module) pairs.
+        """
+        return self._modules.items()
 
     def parameters(self, *, include_submodules: bool = True, as_array: bool = True) -> list[Parameter | wp.array]:
         """Get the registered parameters.
@@ -155,26 +235,34 @@ class Module(ABC):
         """
         return self._parameters.items()
 
-    def modules(self) -> list[Module]:
-        """Get the registered modules.
+    def buffers(self, *, include_submodules: bool = True, as_array: bool = True) -> list[Buffer | wp.array]:
+        """Get the registered buffers.
 
-        The modules will be returned in the order that they were registered.
+        The buffers will be returned in the order that they were registered.
 
-        :return: A list of modules.
+        :param include_submodules: Whether to include the buffers of the registered sub-modules.
+        :param as_array: Whether to return the buffers as Warp arrays or as
+            :py:class:`~warp_nn.modules.buffer.Buffer` instances.
+
+        :return: A list of buffers.
         """
-        return self._modules.values()
+        buffers = [buffer.data if as_array else buffer for buffer in self._buffers.values()]
+        if include_submodules:
+            for module in self._modules.values():
+                buffers += module.buffers(as_array=as_array)
+        return buffers
 
-    def named_modules(self) -> list[str, Module]:
-        """Get the registered modules and their names.
+    def named_buffers(self) -> list[str, Buffer]:
+        """Get the registered buffers and their names.
 
-        The modules will be returned in the order that they were registered.
+        The buffers will be returned in the order that they were registered.
 
-        :return: A tuple of (name, module) pairs.
+        :return: A list of (name, buffer) pairs.
         """
-        return self._modules.items()
+        return self._buffers.items()
 
     def state_dict(self, *, destination: dict[str, wp.array] | None = None, prefix: str = "") -> dict[str, wp.array]:
-        """Get the state dictionary, which is a reference to all the parameters of the modules and sub-modules.
+        """Get the state dictionary, which is a reference to all the parameters and buffers of the modules and sub-modules.
 
         :param destination: The destination dictionary to store the state dictionary.
             This argument is used for internal recursion and should not be set by the user.
@@ -188,6 +276,9 @@ class Module(ABC):
         # store parameters
         for name, parameter in self._parameters.items():
             destination[f"{prefix}{name}"] = parameter.data
+        # store buffers
+        for name, buffer in self._buffers.items():
+            destination[f"{prefix}{name}"] = buffer.data
         # iterate over modules
         for name, module in self._modules.items():
             module.state_dict(destination=destination, prefix=f"{prefix}{name}.")
@@ -220,11 +311,18 @@ class Module(ABC):
         :param device: The device to move the module to.
         :return: The module itself.
         """
-        self._device = parse_device(device)
+        device = parse_device(device)
+        # the arrays cached by the module (e.g. the outputs of the forward pass) live on the previous device
+        if device != getattr(self, "_device", None) and hasattr(self, "_cache"):
+            self._cache.clear()
+        self._device = device
         if hasattr(self, "_modules"):
             for module in self._modules.values():
                 module.to(self.device)
         if hasattr(self, "_parameters"):
             for parameter in self._parameters.values():
                 parameter.to(self.device)
+        if hasattr(self, "_buffers"):
+            for buffer in self._buffers.values():
+                buffer.to(self.device)
         return self

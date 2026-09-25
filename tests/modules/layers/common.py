@@ -121,7 +121,19 @@ def check_forward_rnn_cell(
             utilities.check_arrays(torch_output[1], warp_output[1], rtol=rtol, atol=atol)
 
 
-def check_gradients(*, warp_module, torch_module, device, dtype, shape, rtol: float = 1e-02, atol: float = 1e-03):
+def check_gradients(
+    *,
+    warp_module,
+    torch_module,
+    device,
+    dtype,
+    shape,
+    rtol: float = 1e-02,
+    atol: float = 1e-03,
+    weighted: bool = False,
+):
+    # weighted: whether the loss is a weighted sum of the outputs (with random weights), rather than their sum,
+    # since the gradient of the sum of the outputs vanishes for some modules (e.g. normalization layers)
     # move modules to target device
     warp_module.to(device)
     torch_module.to(device)
@@ -135,21 +147,29 @@ def check_gradients(*, warp_module, torch_module, device, dtype, shape, rtol: fl
     # compute loss
     # - torch
     torch_output = torch_module(torch_input)
-    torch_loss = torch_output.sum()
+    if weighted:
+        weights = utilities.sample_array(tuple(torch_output.shape))
+        torch_loss = (torch_output * torch.tensor(weights, device=device)).sum()
+    else:
+        torch_loss = torch_output.sum()
     torch_loss.backward()
     # - warp
     tape = wp.Tape()
     loss = wp.zeros((1,), dtype=wp.float32, requires_grad=True, device=device)
     with tape:
         warp_output = warp_module(warp_input)
-        wp.launch(
-            {1: _loss_1d, 2: _loss_2d, 3: _loss_3d, 4: _loss_4d}[len(warp_output.shape)],
-            dim=warp_output.shape,
-            inputs=[warp_output],
-            outputs=[loss],
-            device=device,
-        )
-    tape.backward(loss)
+        if not weighted:
+            wp.launch(
+                {1: _loss_1d, 2: _loss_2d, 3: _loss_3d, 4: _loss_4d}[len(warp_output.shape)],
+                dim=warp_output.shape,
+                inputs=[warp_output],
+                outputs=[loss],
+                device=device,
+            )
+    if weighted:
+        tape.backward(grads={warp_output: wp.array(weights, device=device)})
+    else:
+        tape.backward(loss)
     # check gradients
     utilities.check_arrays(torch_input.grad, warp_input.grad, rtol=rtol, atol=atol)
     utilities.check_arrays(

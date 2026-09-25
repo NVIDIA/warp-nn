@@ -23,8 +23,8 @@ Implement the :py:meth:`~warp_nn.modules.module.Module.__call__` method to defin
 
 .. important::
 
-    Call :py:meth:`~warp_nn.modules.module.Module.__post_init__` at the end of ``__init__`` so that sub-modules
-    and their parameters are registered automatically.
+    Call :py:meth:`~warp_nn.modules.module.Module.__post_init__` at the end of ``__init__`` so that sub-modules,
+    parameters and buffers are registered automatically.
 
 .. literalinclude:: ../snippets/basics.py
    :start-after: [basics-model-definition-start]

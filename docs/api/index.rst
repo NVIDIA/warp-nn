@@ -7,6 +7,7 @@ API Reference
     activations
     initializers
     layers
+    operators
     optimizers
     utils
 
@@ -19,6 +20,7 @@ Core modules
 .. autosummary::
     :nosignatures:
 
+    ~buffer.Buffer
     ~module.Module
     ~parameter.Parameter
 
@@ -29,14 +31,22 @@ Activations
 .. autosummary::
     :nosignatures:
 
+    CELU
     ELU
+    GELU
+    HardSigmoid
     LeakyReLU
+    LogSoftmax
     ReLU
     SELU
+    Shrink
     Sigmoid
+    Softmax
     SoftPlus
     SoftSign
+    Swish
     Tanh
+    Threshold
 
 Initializers
 ------------
@@ -58,14 +68,37 @@ Layers
 .. autosummary::
     :nosignatures:
 
+    AvgPool1D
+    AvgPool2D
+    BatchNorm
     Conv1D
     Conv2D
+    Dropout
     Flatten
+    GlobalAvgPool
+    GlobalMaxPool
+    GroupNorm
     GRUCell
+    InstanceNorm
+    LayerNorm
     Linear
     LSTMCell
+    MaxPool1D
+    MaxPool2D
+    RMSNorm
     RNNCell
     Sequential
+
+Operators
+---------
+
+.. currentmodule:: warp_nn.modules.operators
+.. autosummary::
+    :nosignatures:
+
+    BinaryOp
+    Clip
+    UnaryOp
 
 Optimizers
 ----------

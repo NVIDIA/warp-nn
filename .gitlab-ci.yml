@@ -77,7 +77,7 @@ test-pytest:
     - os/linux
   before_script:
     - pip install --upgrade pip
-    - python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+    - python -m pip install --quiet torch
     - pip install -e .[tests]
   script:
     - pytest tests/

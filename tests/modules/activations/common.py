@@ -20,6 +20,17 @@ import warp as wp
 from ... import utilities
 
 
+class TorchLambda(torch.nn.Module):
+    """PyTorch module wrapping a function, to be used as reference for functions without a PyTorch module."""
+
+    def __init__(self, function):
+        super().__init__()
+        self.function = function
+
+    def forward(self, input):
+        return self.function(input)
+
+
 @wp.kernel
 def _loss_1d(a: wp.array1d(dtype=float), loss: wp.array1d(dtype=float)):
     i = wp.tid()
@@ -38,7 +49,7 @@ def _loss_3d(a: wp.array3d(dtype=float), loss: wp.array1d(dtype=float)):
     wp.atomic_add(loss, 0, a[i, j, k])
 
 
-def check_forward(*, warp_activation, torch_activation, device, dtype, ndim):
+def check_forward(*, warp_activation, torch_activation, device, dtype, ndim, atol: float = 1e-03):
     # move activations to target device
     warp_activation.to(device)
     torch_activation.to(device)
@@ -50,7 +61,7 @@ def check_forward(*, warp_activation, torch_activation, device, dtype, ndim):
     warp_output = warp_activation(warp_input)
     torch_output = torch_activation(torch_input)
     # check outputs
-    utilities.check_arrays(torch_output, warp_output)
+    utilities.check_arrays(torch_output, warp_output, atol=atol)
 
 
 def check_gradients(*, warp_activation, torch_activation, device, dtype, ndim):
