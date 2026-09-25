@@ -23,6 +23,8 @@
 
 ### Fixed
 - Fix crash when calling a module after moving it to another device (the cached arrays were not reallocated)
+- Fix optimizers' CUDA graph capture and kernel-sharing bugs: first `step()`/`clip_by_total_norm()` call,
+  gradient clipping, and per-optimizer `eps`/`max_norm` handling
 
 ## [0.3.1] - 2026-07-28
 ### Changed

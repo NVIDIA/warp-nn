@@ -35,15 +35,16 @@ from .. import utilities
     phases=[hypothesis.Phase.explicit, hypothesis.Phase.reuse, hypothesis.Phase.generate],
 )
 # optimizer-specific parameters
-@pytest.mark.parametrize("max_norm", [None, 1000.0])
+@pytest.mark.parametrize("max_norm", [None, 1.0])
 @pytest.mark.parametrize("weight_decay", [0.0, 0.9])
 @pytest.mark.parametrize("dampening", [0.0, 0.8])
 @pytest.mark.parametrize("momentum", [0.0, 0.7])
 # test-specific parameters
+@pytest.mark.parametrize("disable_graph", [True, False])
 @pytest.mark.parametrize("ndim", [2])
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_step(capsys, device, dtype, ndim, momentum, dampening, weight_decay, max_norm, learning_rate):
+def test_step(capsys, device, dtype, ndim, disable_graph, momentum, dampening, weight_decay, max_norm, learning_rate):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
 
@@ -83,7 +84,7 @@ def test_step(capsys, device, dtype, ndim, momentum, dampening, weight_decay, ma
         weight_decay=weight_decay,
         max_norm=max_norm,
         device=device,
-        disable_graph=True,
+        disable_graph=disable_graph,
     )
     warp_loss = wp.zeros((1,), dtype=wp.float32, requires_grad=True, device=device)
     for i in range(10):
@@ -104,6 +105,8 @@ def test_step(capsys, device, dtype, ndim, momentum, dampening, weight_decay, ma
             wp.launch(_sum_loss, dim=warp_output.shape, inputs=[warp_output, warp_loss], device=device)
         warp_tape.backward(warp_loss)
         # step optimizers
+        if max_norm is not None:
+            torch.nn.utils.clip_grad_norm_(torch_module.parameters(), max_norm)
         torch_optimizer.step()
         warp_optimizer.step()
         # check gradients

@@ -89,7 +89,6 @@ class SGD(Optimizer):
         self._timestep = wp.zeros((1,), dtype=wp.float32, device=self.device)
 
         # runtime variables
-        self._graph_step = None
         self._kernel_increase_timestep, self._kernel_step = _create_kernels(
             self._config, momentum=self._momentum, dampening=self._dampening, weight_decay=self._weight_decay
         )
@@ -106,7 +105,7 @@ class SGD(Optimizer):
         if self._graph_step is None:
             with ScopedCapture(device=self.device, enabled=self._device.is_cuda and not self._disable_graph) as capture:
                 if self._max_norm is not None:
-                    self.clip_by_total_norm(self._max_norm, disable_graph=True)
+                    self._launch_clip_by_total_norm()
                 wp.launch(
                     self._kernel_increase_timestep,
                     dim=1,
@@ -123,7 +122,7 @@ class SGD(Optimizer):
                         block_dim=self._config.block_dim,
                     )
             self._graph_step = capture.graph
-        else:
+        if self._graph_step is not None:
             wp.capture_launch(self._graph_step)
 
     def state_dict(self) -> dict[str, Any]:

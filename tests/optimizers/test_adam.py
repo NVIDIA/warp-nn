@@ -19,6 +19,7 @@ import pytest
 
 import torch
 
+import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
@@ -35,14 +36,15 @@ from .. import utilities
     phases=[hypothesis.Phase.explicit, hypothesis.Phase.reuse, hypothesis.Phase.generate],
 )
 # optimizer-specific parameters
-@pytest.mark.parametrize("max_norm", [None, 1000.0])
+@pytest.mark.parametrize("max_norm", [None, 1.0])
 @pytest.mark.parametrize("eps", [1e-8, 1e-6])
 @pytest.mark.parametrize("betas", [(0.9, 0.999), (0.8, 0.888)])
 # test-specific parameters
+@pytest.mark.parametrize("disable_graph", [True, False])
 @pytest.mark.parametrize("ndim", [2])
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_step(capsys, device, dtype, ndim, betas, eps, max_norm, learning_rate):
+def test_step(capsys, device, dtype, ndim, disable_graph, betas, eps, max_norm, learning_rate):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
 
@@ -75,7 +77,7 @@ def test_step(capsys, device, dtype, ndim, betas, eps, max_norm, learning_rate):
         eps=eps,
         max_norm=max_norm,
         device=device,
-        disable_graph=True,
+        disable_graph=disable_graph,
     )
     warp_loss = wp.zeros((1,), dtype=wp.float32, requires_grad=True, device=device)
     for i in range(10):
@@ -96,6 +98,8 @@ def test_step(capsys, device, dtype, ndim, betas, eps, max_norm, learning_rate):
             wp.launch(_sum_loss, dim=warp_output.shape, inputs=[warp_output, warp_loss], device=device)
         warp_tape.backward(warp_loss)
         # step optimizers
+        if max_norm is not None:
+            torch.nn.utils.clip_grad_norm_(torch_module.parameters(), max_norm)
         torch_optimizer.step()
         warp_optimizer.step()
         # check gradients
@@ -118,3 +122,21 @@ def test_step(capsys, device, dtype, ndim, betas, eps, max_norm, learning_rate):
         utilities.check_arrays(warp_old_parameters, warp_new_parameters, test="not-equal", msg=msg)
         torch_old_parameters = torch_new_parameters
         warp_old_parameters = warp_new_parameters
+
+
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_eps(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    # each `eps` specializes the kernels: optimizers (created one after the other in the same process)
+    # must not share them. After the first step, the update is: lr * gradient / (|gradient| + eps)
+    gradient = np.full((100,), 1e-3, dtype=np.float32)
+    for eps in [1e-8, 1.0]:
+        parameter = wp.zeros(gradient.shape, dtype=wp.float32, device=device, requires_grad=True)
+        parameter.grad.assign(gradient)
+        optimizer = Adam([parameter], lr=1.0, eps=eps, device=device)
+        optimizer.step()
+        expected = wp.array(-gradient / (np.abs(gradient) + eps))
+        utilities.check_arrays([expected], [parameter], atol=1e-4, msg=f"eps: {eps}")

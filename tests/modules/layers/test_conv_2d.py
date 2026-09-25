@@ -27,6 +27,16 @@ from ... import utilities
 from .common import check_forward, check_gradients, check_initialize_parameters, check_requires_grad
 
 
+@pytest.fixture(autouse=True)
+def _disable_cudnn_tf32():
+    # cuDNN uses TF32 for convolutions on CUDA by default, which loses precision relative to
+    # the warp reference implementation; disable it so outputs/gradients match within tolerance
+    previous = torch.backends.cudnn.allow_tf32
+    torch.backends.cudnn.allow_tf32 = False
+    yield
+    torch.backends.cudnn.allow_tf32 = previous
+
+
 @hypothesis.given(
     batch_size=st.integers(min_value=1, max_value=100),
     in_channels=st.sampled_from(list(range(30, 100, 3))),

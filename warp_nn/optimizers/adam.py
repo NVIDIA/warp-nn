@@ -58,7 +58,9 @@ def _create_kernels(config: KernelConfig, *, betas: tuple[float, float], eps: fl
 
         wp.tile_store(m1, tiled_m1, offset=offset)
         wp.tile_store(m2, tiled_m2, offset=offset)
-        wp.tile_store(parameters, tiled_parameters - lr[0] * wp.tile_map(hat_ratio, m1_hat, m2_hat), offset=offset)
+        wp.tile_store(
+            parameters, tiled_parameters - lr[0] * wp.tile_map(wp.static(hat_ratio), m1_hat, m2_hat), offset=offset
+        )
 
     return increase_timestep, optimizer_step
 
@@ -97,7 +99,6 @@ class Adam(Optimizer):
         self._timestep = wp.zeros((1,), dtype=wp.float32, device=self.device)
 
         # runtime variables
-        self._graph_step = None
         self._kernel_increase_timestep, self._kernel_step = _create_kernels(
             self._config, betas=self._betas, eps=self._eps
         )
@@ -114,7 +115,7 @@ class Adam(Optimizer):
         if self._graph_step is None:
             with ScopedCapture(device=self.device, enabled=self._device.is_cuda and not self._disable_graph) as capture:
                 if self._max_norm is not None:
-                    self.clip_by_total_norm(self._max_norm, disable_graph=True)
+                    self._launch_clip_by_total_norm()
                 wp.launch(
                     self._kernel_increase_timestep,
                     dim=1,
@@ -131,7 +132,7 @@ class Adam(Optimizer):
                         block_dim=self._config.block_dim,
                     )
             self._graph_step = capture.graph
-        else:
+        if self._graph_step is not None:
             wp.capture_launch(self._graph_step)
 
     def state_dict(self) -> dict[str, Any]:

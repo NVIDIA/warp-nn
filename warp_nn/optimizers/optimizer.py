@@ -47,7 +47,7 @@ def _create_clip_by_total_norm_kernels(config: KernelConfig, *, max_norm: float)
         offset = (i * wp.static(config.tile_1d[0]),)
         tiled_sum_squares = wp.tile_broadcast(wp.tile_load(sum_squares, shape=(1,)), shape=shape)
         tiled_gradients = wp.tile_load(gradients, shape=shape, offset=offset)
-        tiled_gradients = wp.tile_map(clip_by_norm, tiled_gradients, tiled_sum_squares)
+        tiled_gradients = wp.tile_map(wp.static(clip_by_norm), tiled_gradients, tiled_sum_squares)
         wp.tile_store(gradients, tiled_gradients, offset=offset)
 
     return sum_squares, clip_by_total_norm
@@ -79,6 +79,7 @@ class Optimizer(ABC):
 
         # runtime variables
         self._config = get_kernel_config()
+        self._graph_step = None
         if self._max_norm is not None:
             self._configure_clip_by_total_norm(self._max_norm)
 
@@ -112,44 +113,56 @@ class Optimizer(ABC):
 
     def _configure_clip_by_total_norm(self, max_norm: float):
         self._max_norm = max_norm
+        self._graph_step = None  # captured (if any) with the previous kernels and arrays
         self._graph_clip_by_total_norm = None
         self._array_sum_squares = wp.zeros((1,), dtype=wp.float32, device=self._device)
         self._kernel_sum_squares, self._kernel_clip_by_total_norm = _create_clip_by_total_norm_kernels(
             self._config, max_norm=self._max_norm
         )
 
+    def _launch_clip_by_total_norm(self) -> None:
+        """Launch the gradient clipping kernels (without graph capture/replay) for the current `max_norm`."""
+        self._array_sum_squares.zero_()
+        for gradient in self._gradients:
+            wp.launch_tiled(
+                self._kernel_sum_squares,
+                dim=resolve_dim(config=self._config, shape=gradient.shape, tiled=True),
+                inputs=[gradient],
+                outputs=[self._array_sum_squares],
+                device=self._device,
+                block_dim=self._config.block_dim,
+            )
+        for gradient in self._gradients:
+            wp.launch_tiled(
+                self._kernel_clip_by_total_norm,
+                dim=resolve_dim(config=self._config, shape=gradient.shape, tiled=True),
+                inputs=[gradient, self._array_sum_squares],
+                device=self._device,
+                block_dim=self._config.block_dim,
+            )
+
     def clip_by_total_norm(self, max_norm: float, *, disable_graph: bool = False):
         """Clip (scaling down) parameters' gradients in-place by their total norm.
 
         https://arxiv.org/abs/1211.5063
 
+        .. note::
+
+            The given ``max_norm`` also becomes the one used by subsequent :py:meth:`step` calls.
+            Changing it creates new kernels (compiled on first use) and discards the captured graphs.
+
         :param max_norm: Maximum global norm.
-        :param disable_graph: Whether to disable graph capture.
+        :param disable_graph: Whether to disable graph capture (e.g.: to capture it as part of an external graph).
         """
         # create kernels if not already done or if `max_norm` has changed
         if max_norm != self._max_norm:
             self._configure_clip_by_total_norm(max_norm)
         # clip gradients
-        self._array_sum_squares.zero_()
-        if self._graph_clip_by_total_norm is None:
-            with ScopedCapture(device=self._device, enabled=self._device.is_cuda and not disable_graph) as capture:
-                for gradient in self._gradients:
-                    wp.launch(
-                        self._kernel_sum_squares,
-                        dim=resolve_dim(config=self._config, shape=gradient.shape, tiled=True),
-                        inputs=[gradient],
-                        outputs=[self._array_sum_squares],
-                        device=self._device,
-                        block_dim=self._config.block_dim,
-                    )
-                for gradient in self._gradients:
-                    wp.launch(
-                        self._kernel_clip_by_total_norm,
-                        dim=resolve_dim(config=self._config, shape=gradient.shape, tiled=True),
-                        inputs=[gradient, self._array_sum_squares],
-                        device=self._device,
-                        block_dim=self._config.block_dim,
-                    )
-            self._graph_clip_by_total_norm = capture.graph
-        else:
+        if self._device.is_cuda and not disable_graph:
+            if self._graph_clip_by_total_norm is None:
+                with ScopedCapture(device=self._device) as capture:
+                    self._launch_clip_by_total_norm()
+                self._graph_clip_by_total_norm = capture.graph
             wp.capture_launch(self._graph_clip_by_total_norm)
+        else:
+            self._launch_clip_by_total_norm()
