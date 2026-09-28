@@ -33,7 +33,7 @@ def test_forward(capsys, device, dtype, ndim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_forward(
-        warp_activation=nn.SoftSign(), torch_activation=torch.nn.Softsign(), device=device, dtype=dtype, ndim=ndim
+        warp_activation=nn.Softsign(), torch_activation=torch.nn.Softsign(), device=device, dtype=dtype, ndim=ndim
     )
 
 
@@ -45,7 +45,7 @@ def test_gradients(capsys, device, dtype, ndim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_gradients(
-        warp_activation=nn.SoftSign(), torch_activation=torch.nn.Softsign(), device=device, dtype=dtype, ndim=ndim
+        warp_activation=nn.Softsign(), torch_activation=torch.nn.Softsign(), device=device, dtype=dtype, ndim=ndim
     )
 
 
@@ -58,7 +58,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_requires_grad(
-        warp_activation=nn.SoftSign(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
+        warp_activation=nn.Softsign(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )
 
 
@@ -67,8 +67,8 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
 def test_extreme_inputs(capsys, device):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_extreme_inputs(warp_activation=nn.SoftSign(), torch_activation=torch.nn.Softsign(), device=device)
+    check_extreme_inputs(warp_activation=nn.Softsign(), torch_activation=torch.nn.Softsign(), device=device)
 
 
 def test_unsupported_input(capsys):
-    check_unsupported_input(warp_activation=nn.SoftSign())
+    check_unsupported_input(warp_activation=nn.Softsign())

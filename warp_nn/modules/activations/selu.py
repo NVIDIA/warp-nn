@@ -22,20 +22,24 @@ from warp_nn.modules.module import Module
 from warp_nn.utils import get_kernel_config, resolve_dim
 
 
-def _create_function():
+def _create_function(*, scale: float, alpha: float):
     @wp.func
     def function(x: Any):
-        scale = x.dtype(1.0507009873554804934193349852946)
-        alpha = x.dtype(1.6732632423543772848170429916717)
         if x >= x.dtype(0.0):
-            return scale * x
-        return scale * alpha * (wp.exp(x) - x.dtype(1.0))
+            return x.dtype(wp.static(scale)) * x
+        return x.dtype(wp.static(scale)) * x.dtype(wp.static(alpha)) * (wp.exp(x) - x.dtype(1.0))
 
     return function
 
 
 class SELU(Module):
-    def __init__(self, *, requires_grad: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        scale: float = 1.0507009873554804934193349852946,
+        alpha: float = 1.6732632423543772848170429916717,
+        requires_grad: bool = True,
+    ) -> None:
         r"""Scaled Exponential Linear Unit (SELU) activation function.
 
         This class computes the element-wise SELU activation function:
@@ -47,20 +51,32 @@ class SELU(Module):
                 \lambda \, \alpha \, (e^x - 1), & \text{ if } x < 0
             \end{cases}
 
-        where
+        where :math:`\lambda` and :math:`\alpha` default to
+        :math:`1.0507009873554804934193349852946` and :math:`1.6732632423543772848170429916717` respectively.
 
-        .. math::
-
-            \lambda = 1.0507009873554804934193349852946 \\
-            \alpha = 1.6732632423543772848170429916717
-
+        :param scale: The scale (:math:`\lambda`) value for the SELU function.
+        :param alpha: The alpha (:math:`\alpha`) value for the SELU function.
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
+        self._scale = float(scale)
+        self._alpha = float(alpha)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
-        self._kernels = create_unary_kernels(config=self._config, function=_create_function())
+        self._kernels = create_unary_kernels(
+            config=self._config, function=_create_function(scale=self._scale, alpha=self._alpha)
+        )
+
+    @property
+    def scale(self):
+        """The scale value for the SELU function."""
+        return self._scale
+
+    @property
+    def alpha(self):
+        """The alpha value for the SELU function."""
+        return self._alpha
 
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the activation function.

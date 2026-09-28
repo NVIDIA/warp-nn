@@ -40,7 +40,7 @@ class InstanceNorm(GroupNorm):
 
         .. note::
 
-            Unlike PyTorch's ``torch.nn.InstanceNorm*d``, running statistics are not supported:
+            Unlike PyTorch's ``InstanceNorm*d``, running statistics are not supported:
             the statistics are always computed from the input data.
 
         |hr|

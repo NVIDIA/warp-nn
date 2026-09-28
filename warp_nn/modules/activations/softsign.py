@@ -30,15 +30,15 @@ def _create_function():
     return function
 
 
-class SoftSign(Module):
+class Softsign(Module):
     def __init__(self, *, requires_grad: bool = True) -> None:
-        r"""Soft-sign activation function.
+        r"""Softsign activation function.
 
-        This class computes the element-wise soft-sign activation function:
+        This class computes the element-wise Softsign activation function:
 
         .. math::
 
-            \text{SoftSign}(x) = \frac{x}{1 + |x|}
+            \text{Softsign}(x) = \frac{x}{1 + |x|}
 
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """

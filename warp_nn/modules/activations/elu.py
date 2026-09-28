@@ -49,7 +49,7 @@ class ELU(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        self._alpha = alpha
+        self._alpha = float(alpha)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()

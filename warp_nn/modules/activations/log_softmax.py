@@ -21,27 +21,29 @@ from warp_nn.modules.activations._softmax import SoftmaxBase, overload_kernels
 
 
 @wp.kernel
-def _softmax_kernel(input: wp.array3d[Any], maximum: wp.array3d[Any], total: wp.array3d[Any], output: wp.array3d[Any]):
+def _log_softmax_kernel(
+    input: wp.array3d[Any], maximum: wp.array3d[Any], total: wp.array3d[Any], output: wp.array3d[Any]
+):
     i, j, k = wp.tid()
     m = maximum[i, 0, k]
-    output[i, j, k] = output.dtype(wp.exp(m.dtype(input[i, j, k]) - m) / total[i, 0, k])
+    output[i, j, k] = output.dtype(m.dtype(input[i, j, k]) - m - wp.log(total[i, 0, k]))
 
 
-_SOFTMAX_KERNELS = overload_kernels(_softmax_kernel, num_accumulation_arrays=2, has_output=True)
+_LOG_SOFTMAX_KERNELS = overload_kernels(_log_softmax_kernel, num_accumulation_arrays=2, has_output=True)
 
 
-class Softmax(SoftmaxBase):
+class LogSoftmax(SoftmaxBase):
     def __init__(self, *, dim: int = -1, requires_grad: bool = True) -> None:
-        r"""Softmax activation function.
+        r"""Log-Softmax activation function.
 
-        This class computes the Softmax activation function along the given dimension,
-        rescaling the input values so that they lie in the range [0, 1] and sum to 1:
+        This class computes the logarithm of the Softmax activation function along the given dimension:
 
         .. math::
 
-            \text{Softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}}
+            \text{LogSoftmax}(x_i) = \log\left(\frac{e^{x_i}}{\sum_j e^{x_j}}\right)
+                = x_i - \log\left(\sum_j e^{x_j}\right)
 
-        :param dim: The dimension along which the Softmax function is computed.
+        :param dim: The dimension along which the Log-Softmax function is computed.
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
-        super().__init__(dim=dim, output_kernels=_SOFTMAX_KERNELS, requires_grad=requires_grad)
+        super().__init__(dim=dim, output_kernels=_LOG_SOFTMAX_KERNELS, requires_grad=requires_grad)

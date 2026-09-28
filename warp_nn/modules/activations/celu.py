@@ -51,7 +51,6 @@ class CELU(Module):
         super().__init__(requires_grad=requires_grad)
         if alpha == 0.0:
             raise ValueError("The alpha value for the CELU function must be non-zero")
-        # the values are converted to Python floats, since they are embedded in the kernels
         self._alpha = float(alpha)
         # runtime variables
         self._cache = {}

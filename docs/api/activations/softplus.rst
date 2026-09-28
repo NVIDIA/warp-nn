@@ -1,10 +1,10 @@
-Soft-sign
-=========
+Softplus
+========
 
 API
 ^^^
 
-.. autoclass:: warp_nn.modules.activations.SoftSign
+.. autoclass:: warp_nn.modules.activations.Softplus
     :members:
     :show-inheritance:
     :special-members: __call__

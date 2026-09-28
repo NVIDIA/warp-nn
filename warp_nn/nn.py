@@ -28,8 +28,8 @@ from warp_nn.modules.activations import (
     Shrink,
     Sigmoid,
     Softmax,
-    SoftPlus,
-    SoftSign,
+    Softplus,
+    Softsign,
     Swish,
     Threshold,
 )

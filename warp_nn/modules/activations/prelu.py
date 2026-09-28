@@ -45,7 +45,7 @@ class PReLU(Module):
                 \text{slope} \, x, & \text{ if } x < 0
             \end{cases}
 
-        Unlike PyTorch's ``torch.nn.PReLU`` layer (with a learnable slope parameter), the slope is an input array
+        Unlike PyTorch's ``PReLU`` layer (with a learnable slope parameter), the slope is an input array
         with the same shape as the input array.
 
         :param requires_grad: Whether the cached output arrays of the module require gradients.

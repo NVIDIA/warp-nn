@@ -22,34 +22,62 @@ from warp_nn.modules.module import Module
 from warp_nn.utils import get_kernel_config, resolve_dim
 
 
-def _create_function():
+def _create_function(*, beta: float, threshold: float):
     @wp.func
     def function(x: Any):
-        # log1p(exp(x)), rewritten for positive x to avoid overflowing exp()
-        if x > x.dtype(0.0):
-            return x + log1p(wp.exp(-x))
-        return log1p(wp.exp(x))
+        b = x.dtype(wp.static(beta))
+        bx = b * x
+        # revert to the linear function for numerical stability
+        if bx > x.dtype(wp.static(threshold)):
+            return x
+        # log1p(exp(beta * x)) / beta, rewritten for positive beta * x to avoid overflowing exp()
+        if bx > x.dtype(0.0):
+            return x + log1p(wp.exp(-bx)) / b
+        return log1p(wp.exp(bx)) / b
 
     return function
 
 
-class SoftPlus(Module):
-    def __init__(self, *, requires_grad: bool = True) -> None:
-        r"""Soft-plus activation function.
+class Softplus(Module):
+    def __init__(self, *, beta: float = 1.0, threshold: float = 20.0, requires_grad: bool = True) -> None:
+        r"""Softplus activation function.
 
-        This class computes the element-wise soft-plus activation function:
+        This class computes the element-wise Softplus activation function:
 
         .. math::
 
-            \text{SoftPlus}(x) = \log(1 + e^x)
+            \text{Softplus}(x) = \frac{1}{\beta} \log(1 + e^{\beta x})
 
+        For numerical stability, the implementation reverts to the linear function when
+        :math:`\beta \, x > \text{threshold}`.
+
+        :param beta: The beta value for the Softplus function. It must be non-zero.
+        :param threshold: When :math:`\beta \, x` exceeds this value, the output reverts to the linear function.
         :param requires_grad: Whether the cached output arrays of the module require gradients.
+
+        :raises ValueError: If ``beta`` is zero.
         """
         super().__init__(requires_grad=requires_grad)
+        if beta == 0.0:
+            raise ValueError("The beta value for the Softplus function must be non-zero")
+        self._beta = float(beta)
+        self._threshold = float(threshold)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
-        self._kernels = create_unary_kernels(config=self._config, function=_create_function())
+        self._kernels = create_unary_kernels(
+            config=self._config, function=_create_function(beta=self._beta, threshold=self._threshold)
+        )
+
+    @property
+    def beta(self):
+        """The beta value for the Softplus function."""
+        return self._beta
+
+    @property
+    def threshold(self):
+        """The threshold value above which the Softplus function reverts to the linear function."""
+        return self._threshold
 
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the activation function.

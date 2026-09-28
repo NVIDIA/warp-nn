@@ -38,11 +38,12 @@ def test_forward(capsys, device, dtype, ndim, dim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_forward(
-        warp_activation=nn.Softmax(dim=dim),
-        torch_activation=torch.nn.Softmax(dim=dim),
+        warp_activation=nn.LogSoftmax(dim=dim),
+        torch_activation=torch.nn.LogSoftmax(dim=dim),
         device=device,
         dtype=dtype,
         ndim=ndim,
+        atol=4e-3 if dtype == wp.float16 else 1e-3,  # Log-Softmax outputs are in [-4, -2]: 1 ULP is 2e-3
     )
 
 
@@ -52,23 +53,23 @@ def test_forward(capsys, device, dtype, ndim, dim):
 def test_gradients(capsys, device, dtype, ndim, dim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    # the gradient of the sum of the outputs is zero for Softmax, so check the gradient of a weighted sum too
+    # check the gradient of a weighted sum, in addition to the (non-degenerate) gradient of the plain sum below
     array = utilities.sample_array(shape=[10] * ndim)
     weights = np.linspace(-1.0, 1.0, 10**ndim, dtype=np.float32).reshape([10] * ndim)
     # - torch
     torch_input = torch.tensor(array, requires_grad=True)
-    (torch.nn.Softmax(dim=dim)(torch_input) * torch.tensor(weights)).sum().backward()
+    (torch.nn.LogSoftmax(dim=dim)(torch_input) * torch.tensor(weights)).sum().backward()
     # - warp
     warp_input = wp.array(array, device=device, requires_grad=True)
     tape = wp.Tape()
     with tape:
-        warp_output = nn.Softmax(dim=dim).to(device)(warp_input)
+        warp_output = nn.LogSoftmax(dim=dim).to(device)(warp_input)
     tape.backward(grads={warp_output: wp.array(weights, device=device)})
     utilities.check_arrays(torch_input.grad, warp_input.grad)
     # the gradient of the sum of the outputs
     check_gradients(
-        warp_activation=nn.Softmax(dim=dim),
-        torch_activation=torch.nn.Softmax(dim=dim),
+        warp_activation=nn.LogSoftmax(dim=dim),
+        torch_activation=torch.nn.LogSoftmax(dim=dim),
         device=device,
         dtype=dtype,
         ndim=ndim,
@@ -80,8 +81,8 @@ def test_numerical_stability(capsys, device):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     array = np.array([[1000.0, 1001.0, 1002.0], [-1000.0, -1001.0, -1002.0]], dtype=np.float32)
-    warp_output = nn.Softmax().to(device)(wp.array(array, device=device)).numpy()
-    torch_output = torch.nn.Softmax(dim=-1)(torch.tensor(array)).numpy()
+    warp_output = nn.LogSoftmax().to(device)(wp.array(array, device=device)).numpy()
+    torch_output = torch.nn.LogSoftmax(dim=-1)(torch.tensor(array)).numpy()
     assert np.all(np.isfinite(warp_output))
     np.testing.assert_allclose(warp_output, torch_output, rtol=1e-5, atol=1e-5)
 
@@ -92,8 +93,8 @@ def test_half_precision_accumulation(capsys, device):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     array = utilities.sample_array(shape=[3, 4096], dtype=wp.float16)
-    warp_output = nn.Softmax().to(device)(wp.array(array, device=device)).numpy()
-    torch_output = torch.nn.Softmax(dim=-1)(torch.tensor(array, dtype=torch.float64)).numpy()
+    warp_output = nn.LogSoftmax().to(device)(wp.array(array, device=device)).numpy()
+    torch_output = torch.nn.LogSoftmax(dim=-1)(torch.tensor(array, dtype=torch.float64)).numpy()
     np.testing.assert_allclose(warp_output, torch_output, rtol=2e-3)
 
 
@@ -104,7 +105,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_requires_grad(
-        warp_activation=nn.Softmax(requires_grad=requires_grad),
+        warp_activation=nn.LogSoftmax(requires_grad=requires_grad),
         device=device,
         ndim=ndim,
         requires_grad=requires_grad,
@@ -112,7 +113,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
 
 
 def test_invalid_inputs(capsys):
-    module = nn.Softmax(dim=2).to("cpu")
+    module = nn.LogSoftmax(dim=2).to("cpu")
     assert module.dim == 2
     # out-of-range dimension
     with pytest.raises(IndexError, match="out of range"):
@@ -123,5 +124,5 @@ def test_invalid_inputs(capsys):
 
 
 def test_empty_input(capsys):
-    output = nn.Softmax(dim=1).to("cpu")(wp.zeros((3, 0), dtype=wp.float32, device="cpu"))
+    output = nn.LogSoftmax(dim=1).to("cpu")(wp.zeros((3, 0), dtype=wp.float32, device="cpu"))
     assert output.shape == (3, 0)

@@ -46,13 +46,12 @@ class Swish(Module):
             \text{Swish}(x) = x \, \sigma(\alpha \, x) = \frac{x}{1 + e^{-\alpha \, x}}
 
         With the default ``alpha`` value, it is the Sigmoid Linear Unit (SiLU) activation function
-        (PyTorch's ``torch.nn.SiLU``).
+        (PyTorch's ``SiLU``).
 
         :param alpha: The coefficient that multiplies the input of the sigmoid function.
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # the values are converted to Python floats, since they are embedded in the kernels
         self._alpha = float(alpha)
         # runtime variables
         self._cache = {}

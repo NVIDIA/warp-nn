@@ -18,8 +18,8 @@ Activations
     Shrink <activations/shrink>
     Sigmoid <activations/sigmoid>
     Softmax <activations/softmax>
-    Soft-plus <activations/soft_plus>
-    Soft-sign <activations/soft_sign>
+    Softplus <activations/softplus>
+    Softsign <activations/softsign>
     Swish <activations/swish>
     Threshold <activations/threshold>
 
@@ -45,7 +45,7 @@ The following table lists the available activations:
     Shrink
     Sigmoid
     Softmax
-    SoftPlus
-    SoftSign
+    Softplus
+    Softsign
     Swish
     Threshold

@@ -29,7 +29,7 @@
 - Fix optimizers' CUDA graph capture and kernel-sharing bugs: first `step()`/`clip_by_total_norm()` call,
   gradient clipping, and per-optimizer `eps`/`max_norm` handling
 - Fix numerical issues of activations: `ReLU` did not propagate NaN inputs, `Sigmoid` yielded NaN gradients
-  for large negative inputs, and `SoftPlus` overflowed (with NaN gradients) for large positive inputs
+  for large negative inputs, and `Softplus` overflowed (with NaN gradients) for large positive inputs
 
 ## [0.3.1] - 2026-07-28
 ### Changed

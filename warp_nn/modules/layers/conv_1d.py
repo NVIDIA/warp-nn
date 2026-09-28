@@ -84,7 +84,11 @@ class Conv1D(Module):
 
         .. math::
 
-            \text{Conv1D}(x) = TODO
+            \text{Conv1D}(x)_{i, j} = b_j + \sum_{c = 0}^{C_{in} - 1} W_{j, c} \star x_{i, c}
+
+        where :math:`\star` is the valid cross-correlation operator, :math:`i` indexes the batch dimension,
+        :math:`j` the output channel, :math:`c` the input channel (for ``groups = 1``), and :math:`C_{in}` is
+        ``in_channels``.
 
         |hr|
 

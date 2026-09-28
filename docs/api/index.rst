@@ -45,8 +45,8 @@ Activations
     Shrink
     Sigmoid
     Softmax
-    SoftPlus
-    SoftSign
+    Softplus
+    Softsign
     Swish
     Threshold
 

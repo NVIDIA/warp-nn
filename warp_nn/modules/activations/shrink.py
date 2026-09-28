@@ -54,7 +54,7 @@ class Shrink(Module):
 
             \lambda = \text{lambd}
 
-        PyTorch's ``torch.nn.Hardshrink(lambd)`` and ``torch.nn.Softshrink(lambd)`` are equivalent to
+        PyTorch's ``Hardshrink(lambd)`` and ``Softshrink(lambd)`` are equivalent to
         ``Shrink(lambd=lambd, bias=0)`` and ``Shrink(lambd=lambd, bias=lambd)``, respectively.
 
         :param lambd: The lambda value (threshold) for the Shrink function.
@@ -62,7 +62,6 @@ class Shrink(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # the values are converted to Python floats, since they are embedded in the kernels
         self._lambd = float(lambd)
         self._bias = float(bias)
         # runtime variables

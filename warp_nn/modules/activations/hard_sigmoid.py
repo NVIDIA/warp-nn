@@ -47,7 +47,7 @@ class HardSigmoid(Module):
 
         .. note::
 
-            The default values match PyTorch's ``torch.nn.Hardsigmoid``
+            The default values match PyTorch's ``Hardsigmoid``
             (the default ``alpha`` value of the ONNX ``HardSigmoid`` operator is 0.2).
 
         :param alpha: The slope of the linear region.
@@ -55,7 +55,6 @@ class HardSigmoid(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # the values are converted to Python floats, since they are embedded in the kernels
         self._alpha = float(alpha)
         self._beta = float(beta)
         # runtime variables

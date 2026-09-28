@@ -33,7 +33,7 @@ def _create_function(*, threshold: float, value: float):
 
 
 class Threshold(Module):
-    def __init__(self, threshold: float, value: float, *, requires_grad: bool = True) -> None:
+    def __init__(self, *, threshold: float, value: float, requires_grad: bool = True) -> None:
         r"""Threshold activation function.
 
         This class computes the element-wise Threshold activation function:
@@ -52,7 +52,6 @@ class Threshold(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # the values are converted to Python floats, since they are embedded in the kernels
         self._threshold = float(threshold)
         self._value = float(value)
         # runtime variables

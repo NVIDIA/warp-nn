@@ -22,27 +22,49 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
+from .common import TorchLambda, check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
+def _torch_selu(*, scale: float, alpha: float):
+    return TorchLambda(lambda x: scale * torch.where(x >= 0, x, alpha * (torch.exp(x) - 1)))
+
+
+# module-specific parameters
+@pytest.mark.parametrize("scale", [1.0, 1.0507009873554804934193349852946])
+@pytest.mark.parametrize("alpha", [1.0, 1.6732632423543772848170429916717])
 # test-specific parameters
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 @pytest.mark.parametrize("dtype", [wp.float16, wp.float32, wp.float64])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_forward(capsys, device, dtype, ndim):
+def test_forward(capsys, device, dtype, ndim, scale, alpha):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_forward(warp_activation=nn.SELU(), torch_activation=torch.nn.SELU(), device=device, dtype=dtype, ndim=ndim)
+    check_forward(
+        warp_activation=nn.SELU(scale=scale, alpha=alpha),
+        torch_activation=_torch_selu(scale=scale, alpha=alpha),
+        device=device,
+        dtype=dtype,
+        ndim=ndim,
+    )
 
 
+# module-specific parameters
+@pytest.mark.parametrize("scale", [1.0, 1.0507009873554804934193349852946])
+@pytest.mark.parametrize("alpha", [1.0, 1.6732632423543772848170429916717])
 # test-specific parameters
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_gradients(capsys, device, dtype, ndim):
+def test_gradients(capsys, device, dtype, ndim, scale, alpha):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_gradients(warp_activation=nn.SELU(), torch_activation=torch.nn.SELU(), device=device, dtype=dtype, ndim=ndim)
+    check_gradients(
+        warp_activation=nn.SELU(scale=scale, alpha=alpha),
+        torch_activation=_torch_selu(scale=scale, alpha=alpha),
+        device=device,
+        dtype=dtype,
+        ndim=ndim,
+    )
 
 
 # module-specific parameters

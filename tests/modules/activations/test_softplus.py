@@ -25,27 +25,43 @@ from ...utilities import is_device_available
 from .common import check_extreme_inputs, check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
+# module-specific parameters
+@pytest.mark.parametrize("beta", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("threshold", [5.0, 20.0])
 # test-specific parameters
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 @pytest.mark.parametrize("dtype", [wp.float16, wp.float32, wp.float64])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_forward(capsys, device, dtype, ndim):
+def test_forward(capsys, device, dtype, ndim, beta, threshold):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_forward(
-        warp_activation=nn.SoftPlus(), torch_activation=torch.nn.Softplus(), device=device, dtype=dtype, ndim=ndim
+        warp_activation=nn.Softplus(beta=beta, threshold=threshold),
+        torch_activation=torch.nn.Softplus(beta=beta, threshold=threshold),
+        device=device,
+        dtype=dtype,
+        ndim=ndim,
+        # dividing by beta < 1 amplifies float16 rounding error
+        atol=3e-3 if dtype == wp.float16 and beta < 1.0 else 1e-3,
     )
 
 
+# module-specific parameters
+@pytest.mark.parametrize("beta", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("threshold", [5.0, 20.0])
 # test-specific parameters
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_gradients(capsys, device, dtype, ndim):
+def test_gradients(capsys, device, dtype, ndim, beta, threshold):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_gradients(
-        warp_activation=nn.SoftPlus(), torch_activation=torch.nn.Softplus(), device=device, dtype=dtype, ndim=ndim
+        warp_activation=nn.Softplus(beta=beta, threshold=threshold),
+        torch_activation=torch.nn.Softplus(beta=beta, threshold=threshold),
+        device=device,
+        dtype=dtype,
+        ndim=ndim,
     )
 
 
@@ -58,17 +74,33 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_requires_grad(
-        warp_activation=nn.SoftPlus(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
+        warp_activation=nn.Softplus(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )
 
 
+# module-specific parameters
+@pytest.mark.parametrize("beta", [0.5, 1.0, 2.0])
 # test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_extreme_inputs(capsys, device):
+def test_extreme_inputs(capsys, device, beta):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_extreme_inputs(warp_activation=nn.SoftPlus(), torch_activation=torch.nn.Softplus(), device=device)
+    check_extreme_inputs(
+        warp_activation=nn.Softplus(beta=beta),
+        torch_activation=torch.nn.Softplus(beta=beta),
+        device=device,
+    )
+
+
+def test_invalid_beta(capsys):
+    assert nn.Softplus(beta=0.5).beta == 0.5
+    with pytest.raises(ValueError, match="non-zero"):
+        nn.Softplus(beta=0.0)
+
+
+def test_threshold(capsys):
+    assert nn.Softplus(threshold=10.0).threshold == 10.0
 
 
 def test_unsupported_input(capsys):
-    check_unsupported_input(warp_activation=nn.SoftPlus())
+    check_unsupported_input(warp_activation=nn.Softplus())

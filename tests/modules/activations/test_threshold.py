@@ -38,7 +38,7 @@ def test_forward(capsys, device, dtype, ndim, threshold, value):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_forward(
-        warp_activation=nn.Threshold(threshold, value),
+        warp_activation=nn.Threshold(threshold=threshold, value=value),
         torch_activation=torch.nn.Threshold(threshold, value),
         device=device,
         dtype=dtype,
@@ -54,7 +54,7 @@ def test_gradients(capsys, device, dtype, ndim, threshold, value):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_gradients(
-        warp_activation=nn.Threshold(threshold, value),
+        warp_activation=nn.Threshold(threshold=threshold, value=value),
         torch_activation=torch.nn.Threshold(threshold, value),
         device=device,
         dtype=dtype,
@@ -69,7 +69,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_requires_grad(
-        warp_activation=nn.Threshold(0.1, 20.0, requires_grad=requires_grad),
+        warp_activation=nn.Threshold(threshold=0.1, value=20.0, requires_grad=requires_grad),
         device=device,
         ndim=ndim,
         requires_grad=requires_grad,
@@ -80,11 +80,11 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
 def test_nan_propagation(capsys, device):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    threshold = nn.Threshold(0.5, -1.0).to(device)
+    threshold = nn.Threshold(threshold=0.5, value=-1.0).to(device)
     assert (threshold.threshold, threshold.value) == (0.5, -1.0)
     output = threshold(wp.array([np.nan, 0.5, 0.75], dtype=wp.float32, device=device)).numpy()
     np.testing.assert_array_equal(output, [np.nan, -1.0, 0.75])
 
 
 def test_unsupported_input(capsys):
-    check_unsupported_input(warp_activation=nn.Threshold(0.1, 20.0))
+    check_unsupported_input(warp_activation=nn.Threshold(threshold=0.1, value=20.0))

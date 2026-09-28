@@ -51,7 +51,7 @@ class Clip(Module):
 
         When ``min_val`` is greater than ``max_val``, all the values are set to ``max_val``.
 
-        PyTorch's ``torch.nn.Hardtanh(min_val, max_val)`` is equivalent to ``Clip(min_val, max_val)``.
+        PyTorch's ``Hardtanh(min_val, max_val)`` is equivalent to ``Clip(min_val, max_val)``.
 
         :param min_val: The lower bound of the interval. If None, the values are not bounded below.
         :param max_val: The upper bound of the interval. If None, the values are not bounded above.

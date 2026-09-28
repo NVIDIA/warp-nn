@@ -55,7 +55,7 @@ class LeakyReLU(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        self._negative_slope = negative_slope
+        self._negative_slope = float(negative_slope)
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
