@@ -17,63 +17,37 @@ from typing import Any, Literal
 
 import warp as wp
 
+from warp_nn.modules._common import create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import KernelConfig, get_kernel_config, overload_kernels, resolve_dim
+from warp_nn.utils import get_kernel_config, resolve_dim
 
 
-@wp.func
-def _gelu(x: Any):
-    # 0.5 * x * (1 + erf(x / sqrt(2))), rewritten with erfc to avoid the cancellation for negative x
-    return x.dtype(0.5) * x * wp.erfc(x * x.dtype(-0.7071067811865476))
+def _create_function(*, approximate: str):
+    if approximate == "tanh":
 
+        @wp.func
+        def function(x: Any):
+            # 0.5 * x * (1 + tanh(z)) with z = sqrt(2 / pi) * (x + 0.044715 * x^3), which saturates (to x or 0)
+            # for |x| > 10. Saturating explicitly avoids overflowing x^3 (in half precision), which yields NaN gradients
+            if x > x.dtype(10.0):
+                return x
+            if x < x.dtype(-10.0):
+                return x * x.dtype(0.0)
+            # 0.5 * (1 + tanh(z)) = sigmoid(2 z), computed without cancellation (nor overflowing exp()) for negative z
+            z = x.dtype(1.5957691216057308) * (x + x.dtype(0.044715) * x * x * x)
+            if z < x.dtype(0.0):
+                e = wp.exp(z)
+                return x * e / (x.dtype(1.0) + e)
+            return x / (x.dtype(1.0) + wp.exp(-z))
 
-@wp.func
-def _gelu_tanh(x: Any):
-    # 0.5 * x * (1 + tanh(z)) with z = sqrt(2 / pi) * (x + 0.044715 * x^3), which saturates (to x or 0) for |x| > 10.
-    # Saturating explicitly avoids overflowing x^3 (in half precision), which yields NaN gradients
-    if x > x.dtype(10.0):
-        return x
-    if x < x.dtype(-10.0):
-        return x * x.dtype(0.0)
-    # 0.5 * (1 + tanh(z)) = sigmoid(2 z), computed without cancellation (nor overflowing exp()) for negative z
-    z = x.dtype(1.5957691216057308) * (x + x.dtype(0.044715) * x * x * x)
-    if z < x.dtype(0.0):
-        e = wp.exp(z)
-        return x * e / (x.dtype(1.0) + e)
-    return x / (x.dtype(1.0) + wp.exp(-z))
+    else:
 
+        @wp.func
+        def function(x: Any):
+            # 0.5 * x * (1 + erf(x / sqrt(2))), rewritten with erfc to avoid the cancellation for negative x
+            return x.dtype(0.5) * x * wp.erfc(x * x.dtype(-0.7071067811865476))
 
-_FUNCTIONS = {"none": _gelu, "tanh": _gelu_tanh}
-
-
-def _create_kernels(config: KernelConfig, *, approximate: str):
-    activation = _FUNCTIONS[approximate]
-
-    @wp.kernel
-    def kernel_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
-        i = wp.tid()
-        shape = (wp.static(config.tile_1d[0]),)
-        offset = (i * wp.static(config.tile_1d[0]),)
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    @wp.kernel
-    def kernel_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
-        i, j = wp.tid()
-        shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
-        offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    @wp.kernel
-    def kernel_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
-        i, j, k = wp.tid()
-        shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))
-        offset = (i * wp.static(config.tile_3d[0]), j * wp.static(config.tile_3d[1]), k * wp.static(config.tile_3d[2]))
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    return overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d])
+    return function
 
 
 class GELU(Module):
@@ -99,13 +73,15 @@ class GELU(Module):
         :raises ValueError: If the approximation algorithm is not supported.
         """
         super().__init__(requires_grad=requires_grad)
-        if approximate not in _FUNCTIONS:
+        if approximate not in ("none", "tanh"):
             raise ValueError(f"Unsupported GELU approximation '{approximate}' (supported: 'none', 'tanh')")
         self._approximate = approximate
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
-        self._kernels = _create_kernels(self._config, approximate=self._approximate)
+        self._kernels = create_unary_kernels(
+            config=self._config, function=_create_function(approximate=self._approximate)
+        )
 
     @property
     def approximate(self) -> str:
@@ -118,15 +94,17 @@ class GELU(Module):
         :param input: The input array, with up to 3 dimensions.
 
         :return: The output array, with same shape as the input array.
+
+        :raises TypeError: If the input array's data type or number of dimensions is not supported.
         """
         dtype = input.dtype
         shape = tuple(input.shape)
         key = (shape, dtype)
+        kernel = self._kernels[(len(shape), dtype)]
         # cache output
         if key not in self._cache:
             self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
-        kernel = self._kernels[(len(shape), dtype)]
         # launch kernel
         wp.launch_tiled(
             kernel,

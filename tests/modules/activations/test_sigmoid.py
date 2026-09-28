@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_extreme_inputs, check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 # test-specific parameters
@@ -60,3 +60,15 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     check_requires_grad(
         warp_activation=nn.Sigmoid(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )
+
+
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_extreme_inputs(capsys, device):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_extreme_inputs(warp_activation=nn.Sigmoid(), torch_activation=torch.nn.Sigmoid(), device=device)
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.Sigmoid())

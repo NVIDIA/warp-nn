@@ -17,7 +17,10 @@ from warp_nn.modules.activations.celu import CELU
 from warp_nn.modules.activations.elu import ELU
 from warp_nn.modules.activations.gelu import GELU
 from warp_nn.modules.activations.hard_sigmoid import HardSigmoid
+from warp_nn.modules.activations.hard_swish import HardSwish
 from warp_nn.modules.activations.leaky_relu import LeakyReLU
+from warp_nn.modules.activations.mish import Mish
+from warp_nn.modules.activations.prelu import PReLU
 from warp_nn.modules.activations.relu import ReLU
 from warp_nn.modules.activations.selu import SELU
 from warp_nn.modules.activations.shrink import Shrink
@@ -26,5 +29,4 @@ from warp_nn.modules.activations.soft_plus import SoftPlus
 from warp_nn.modules.activations.soft_sign import SoftSign
 from warp_nn.modules.activations.softmax import LogSoftmax, Softmax
 from warp_nn.modules.activations.swish import Swish
-from warp_nn.modules.activations.tanh import Tanh
 from warp_nn.modules.activations.threshold import Threshold

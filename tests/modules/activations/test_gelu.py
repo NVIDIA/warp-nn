@@ -23,7 +23,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 @pytest.mark.parametrize("approximate", ["none", "tanh"])
@@ -97,3 +97,7 @@ def test_extreme_values(capsys, device, dtype, approximate):
     rtol, atol = (2e-3, 1e-6) if dtype == wp.float16 else (1e-6, 1e-12)
     np.testing.assert_allclose(warp_output.numpy(), torch_output.detach().numpy(), rtol=rtol, atol=atol)
     np.testing.assert_allclose(warp_input.grad.numpy(), torch_input.grad.numpy(), rtol=rtol, atol=atol)
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.GELU())

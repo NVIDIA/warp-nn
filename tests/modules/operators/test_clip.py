@@ -24,6 +24,7 @@ import warp_nn.nn as nn
 
 from ...utilities import is_device_available
 from ..activations.common import TorchLambda, check_forward, check_gradients, check_requires_grad
+from .common import check_unsupported_input
 
 
 # (min_val, max_val), including unbounded intervals and an empty one (all the values are set to max_val)
@@ -114,3 +115,7 @@ def test_numpy_scalar_arguments(capsys):
     assert type(clip.min_val) is float and type(clip.max_val) is float
     output = clip(wp.array([-1.0, 0.0, 1.0], dtype=wp.float32, device="cpu"))
     np.testing.assert_array_equal(output.numpy(), [-0.5, 0.0, 0.5])
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(module=nn.Clip(-1.0, 1.0))

@@ -23,7 +23,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import TorchLambda, check_forward, check_gradients, check_requires_grad
+from .common import TorchLambda, check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 def _torch_shrink(lambd, bias):
@@ -91,3 +91,7 @@ def test_nan_propagation(capsys, device):
     assert (shrink.lambd, shrink.bias) == (0.5, 0.5)
     output = shrink(wp.array([np.nan, 0.0, 0.25, -1.0], dtype=wp.float32, device=device)).numpy()
     np.testing.assert_array_equal(output, [np.nan, 0.0, 0.0, -0.5])
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.Shrink())

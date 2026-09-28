@@ -35,8 +35,11 @@ Activations
     ELU
     GELU
     HardSigmoid
+    HardSwish
     LeakyReLU
     LogSoftmax
+    Mish
+    PReLU
     ReLU
     SELU
     Shrink
@@ -45,7 +48,6 @@ Activations
     SoftPlus
     SoftSign
     Swish
-    Tanh
     Threshold
 
 Initializers
@@ -79,6 +81,7 @@ Layers
     GlobalMaxPool
     GroupNorm
     GRUCell
+    Identity
     InstanceNorm
     LayerNorm
     Linear
@@ -96,9 +99,39 @@ Operators
 .. autosummary::
     :nosignatures:
 
-    BinaryOp
+    Abs
+    Acos
+    Acosh
+    Add
+    Asin
+    Asinh
+    Atan
+    Atanh
+    BitwiseAnd
+    BitwiseNot
+    BitwiseOr
+    BitwiseXor
+    Ceil
     Clip
-    UnaryOp
+    Cos
+    Cosh
+    Div
+    Erf
+    Exp
+    Floor
+    Log
+    Mul
+    Neg
+    Pow
+    Reciprocal
+    Round
+    Sign
+    Sin
+    Sinh
+    Sqrt
+    Sub
+    Tan
+    Tanh
 
 Optimizers
 ----------

@@ -8,8 +8,11 @@ Activations
     ELU <activations/elu>
     GELU <activations/gelu>
     Hard Sigmoid <activations/hard_sigmoid>
+    Hard Swish <activations/hard_swish>
     Leaky ReLU <activations/leaky_relu>
     Log-Softmax <activations/log_softmax>
+    Mish <activations/mish>
+    PReLU <activations/prelu>
     ReLU <activations/relu>
     SELU <activations/selu>
     Shrink <activations/shrink>
@@ -18,7 +21,6 @@ Activations
     Soft-plus <activations/soft_plus>
     Soft-sign <activations/soft_sign>
     Swish <activations/swish>
-    Tanh <activations/tanh>
     Threshold <activations/threshold>
 
 Activations are non-linear functions that transform the input data into a new representation.
@@ -33,8 +35,11 @@ The following table lists the available activations:
     ELU
     GELU
     HardSigmoid
+    HardSwish
     LeakyReLU
     LogSoftmax
+    Mish
+    PReLU
     ReLU
     SELU
     Shrink
@@ -43,5 +48,4 @@ The following table lists the available activations:
     SoftPlus
     SoftSign
     Swish
-    Tanh
     Threshold

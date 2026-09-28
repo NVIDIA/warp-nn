@@ -22,6 +22,7 @@ from warp_nn.modules.layers.flatten import Flatten
 from warp_nn.modules.layers.global_pool import GlobalAvgPool, GlobalMaxPool
 from warp_nn.modules.layers.group_norm import GroupNorm
 from warp_nn.modules.layers.gru_cell import GRUCell
+from warp_nn.modules.layers.identity import Identity
 from warp_nn.modules.layers.instance_norm import InstanceNorm
 from warp_nn.modules.layers.layer_norm import LayerNorm
 from warp_nn.modules.layers.linear import LazyLinear, Linear

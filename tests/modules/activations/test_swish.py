@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import TorchLambda, check_forward, check_gradients, check_requires_grad
+from .common import TorchLambda, check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 def _torch_swish(alpha):
@@ -72,3 +72,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     swish = nn.Swish(requires_grad=requires_grad)
     assert swish.alpha == 1.0
     check_requires_grad(warp_activation=swish, device=device, ndim=ndim, requires_grad=requires_grad)
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.Swish())

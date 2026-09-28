@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 # module-specific parameters
@@ -72,3 +72,7 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     check_requires_grad(
         warp_activation=nn.ELU(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.ELU())

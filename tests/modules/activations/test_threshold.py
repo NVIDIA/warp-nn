@@ -23,7 +23,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 # (threshold, value), where the last one is equivalent to the ONNX ThresholdedRelu operator
@@ -84,3 +84,7 @@ def test_nan_propagation(capsys, device):
     assert (threshold.threshold, threshold.value) == (0.5, -1.0)
     output = threshold(wp.array([np.nan, 0.5, 0.75], dtype=wp.float32, device=device)).numpy()
     np.testing.assert_array_equal(output, [np.nan, -1.0, 0.75])
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.Threshold(0.1, 20.0))

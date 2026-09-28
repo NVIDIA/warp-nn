@@ -30,6 +30,7 @@ Layers
     GlobalMaxPool <layers/global_max_pool>
     GroupNorm <layers/group_norm>
     GRUCell <layers/gru_cell>
+    Identity <layers/identity>
     InstanceNorm <layers/instance_norm>
     LayerNorm <layers/layer_norm>
     Linear <layers/linear>
@@ -61,6 +62,7 @@ The following table lists the available layers:
     GlobalMaxPool
     GroupNorm
     GRUCell
+    Identity
     InstanceNorm
     LayerNorm
     Linear

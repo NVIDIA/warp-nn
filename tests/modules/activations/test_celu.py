@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 @pytest.mark.parametrize("alpha", [0.5, 1.0, 2.0])
@@ -72,3 +72,7 @@ def test_invalid_alpha(capsys):
     assert nn.CELU(alpha=0.5).alpha == 0.5
     with pytest.raises(ValueError, match="non-zero"):
         nn.CELU(alpha=0.0)
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(warp_activation=nn.CELU())

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Modules specialize their kernels by passing a Warp function to wp.tile_map via wp.static(): either a module-level
-# function (e.g.: UnaryOp) or a closure function that captures Python values via wp.static() (e.g.: ELU).
+# function or a closure function that captures Python values via wp.static() (e.g.: ELU).
 # Since the kernels' source code is identical, Warp must hash the static function (and its static expressions)
 # to tell the kernels apart. Otherwise, they silently share the same compiled code, both in the same process
 # and across processes (via the kernel cache).

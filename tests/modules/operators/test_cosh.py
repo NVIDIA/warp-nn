@@ -22,7 +22,7 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ...utilities import is_device_available
-from .common import check_forward, check_gradients, check_requires_grad
+from .common import check_forward, check_gradients, check_requires_grad, check_unsupported_input
 
 
 # test-specific parameters
@@ -32,17 +32,16 @@ from .common import check_forward, check_gradients, check_requires_grad
 def test_forward(capsys, device, dtype, ndim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_forward(warp_activation=nn.Tanh(), torch_activation=torch.nn.Tanh(), device=device, dtype=dtype, ndim=ndim)
+    check_forward(module=nn.Cosh(), torch_function=torch.cosh, device=device, dtype=dtype, ndim=ndim)
 
 
 # test-specific parameters
 @pytest.mark.parametrize("ndim", [1, 2, 3])
-@pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_gradients(capsys, device, dtype, ndim):
+def test_gradients(capsys, device, ndim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_gradients(warp_activation=nn.Tanh(), torch_activation=torch.nn.Tanh(), device=device, dtype=dtype, ndim=ndim)
+    check_gradients(module=nn.Cosh(), torch_function=torch.cosh, device=device, ndim=ndim)
 
 
 # module-specific parameters
@@ -54,5 +53,9 @@ def test_requires_grad(capsys, device, ndim, requires_grad):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     check_requires_grad(
-        warp_activation=nn.Tanh(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
+        module=nn.Cosh(requires_grad=requires_grad), device=device, ndim=ndim, requires_grad=requires_grad
     )
+
+
+def test_unsupported_input(capsys):
+    check_unsupported_input(module=nn.Cosh())

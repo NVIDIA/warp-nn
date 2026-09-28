@@ -17,42 +17,19 @@ from typing import Any
 
 import warp as wp
 
+from warp_nn.modules._common import create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import KernelConfig, get_kernel_config, overload_kernels, resolve_dim
+from warp_nn.utils import get_kernel_config, resolve_dim
 
 
-def _create_kernels(config: KernelConfig, *, threshold: float, value: float):
+def _create_function(*, threshold: float, value: float):
     @wp.func
-    def activation(x: Any):
+    def function(x: Any):
         if x <= x.dtype(wp.static(threshold)):  # false for NaN, which is then propagated
             return x.dtype(wp.static(value))
         return x
 
-    @wp.kernel
-    def kernel_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
-        i = wp.tid()
-        shape = (wp.static(config.tile_1d[0]),)
-        offset = (i * wp.static(config.tile_1d[0]),)
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    @wp.kernel
-    def kernel_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
-        i, j = wp.tid()
-        shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
-        offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    @wp.kernel
-    def kernel_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
-        i, j, k = wp.tid()
-        shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))
-        offset = (i * wp.static(config.tile_3d[0]), j * wp.static(config.tile_3d[1]), k * wp.static(config.tile_3d[2]))
-        tile = wp.tile_map(wp.static(activation), wp.tile_load(input, shape=shape, offset=offset))
-        wp.tile_store(output, tile, offset=offset)
-
-    return overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d])
+    return function
 
 
 class Threshold(Module):
@@ -81,7 +58,9 @@ class Threshold(Module):
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
-        self._kernels = _create_kernels(self._config, threshold=self._threshold, value=self._value)
+        self._kernels = create_unary_kernels(
+            config=self._config, function=_create_function(threshold=self._threshold, value=self._value)
+        )
 
     @property
     def threshold(self) -> float:
@@ -99,15 +78,17 @@ class Threshold(Module):
         :param input: The input array, with up to 3 dimensions.
 
         :return: The output array, with same shape as the input array.
+
+        :raises TypeError: If the input array's data type or number of dimensions is not supported.
         """
         dtype = input.dtype
         shape = tuple(input.shape)
         key = (shape, dtype)
+        kernel = self._kernels[(len(shape), dtype)]
         # cache output
         if key not in self._cache:
             self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
-        kernel = self._kernels[(len(shape), dtype)]
         # launch kernel
         wp.launch_tiled(
             kernel,

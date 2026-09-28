@@ -17,48 +17,29 @@ from typing import Any
 
 import warp as wp
 
+from warp_nn.modules._common import create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import KernelConfig, get_kernel_config, overload_kernels, resolve_dim
+from warp_nn.utils import get_kernel_config, resolve_dim
 
 
-def _create_kernels(config: KernelConfig):
+def _create_function():
     @wp.func
-    def activation(x: Any):
-        return wp.tanh(x)
+    def function(x: Any):
+        # log(x + sqrt(x^2 - 1)), factored to avoid overflowing x^2
+        return wp.log(x) + wp.log(x.dtype(1.0) + wp.sqrt(x.dtype(1.0) - x.dtype(1.0) / (x * x)))
 
-    @wp.kernel
-    def kernel_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
-        i = wp.tid()
-        shape = (wp.static(config.tile_1d[0]),)
-        offset = (i * wp.static(config.tile_1d[0]),)
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
-
-    @wp.kernel
-    def kernel_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
-        i, j = wp.tid()
-        shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
-        offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
-
-    @wp.kernel
-    def kernel_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
-        i, j, k = wp.tid()
-        shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))
-        offset = (i * wp.static(config.tile_3d[0]), j * wp.static(config.tile_3d[1]), k * wp.static(config.tile_3d[2]))
-        wp.tile_store(output, wp.tile_map(activation, wp.tile_load(input, shape=shape, offset=offset)), offset=offset)
-
-    return overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d])
+    return function
 
 
-class Tanh(Module):
+class Acosh(Module):
     def __init__(self, *, requires_grad: bool = True) -> None:
-        r"""Hyperbolic Tangent (Tanh) activation function.
+        r"""Inverse Hyperbolic Cosine (Acosh) operation.
 
-        This class computes the element-wise hyperbolic tangent activation function:
+        This class computes the element-wise inverse hyperbolic cosine:
 
         .. math::
 
-            \text{Tanh}(x) = \frac{\sinh(x)}{\cosh(x)} = \frac{e^x - e^{-x}}{e^x + e^{-x}}
+            \text{Acosh}(x) = \ln\left(x + \sqrt{x^2 - 1}\right)
 
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
@@ -66,23 +47,25 @@ class Tanh(Module):
         # runtime variables
         self._cache = {}
         self._config = get_kernel_config()
-        self._kernels = _create_kernels(self._config)
+        self._kernels = create_unary_kernels(config=self._config, function=_create_function())
 
     def __call__(self, input: wp.array) -> wp.array:
-        """Forward pass of the activation function.
+        """Forward pass of the operation.
 
         :param input: The input array, with up to 3 dimensions.
 
         :return: The output array, with same shape as the input array.
+
+        :raises TypeError: If the input array's data type or number of dimensions is not supported.
         """
         dtype = input.dtype
         shape = tuple(input.shape)
         key = (shape, dtype)
+        kernel = self._kernels[(len(shape), dtype)]
         # cache output
         if key not in self._cache:
             self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         output = self._cache[key]
-        kernel = self._kernels[(len(shape), dtype)]
         # launch kernel
         wp.launch_tiled(
             kernel,
