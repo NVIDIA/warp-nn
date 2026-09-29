@@ -45,8 +45,6 @@ class _MaxPool(Module):
         validate_arguments(
             kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, dilation=self.dilation
         )
-        # runtime variables
-        self._cache = {}
 
     def __call__(self, input: wp.array) -> wp.array:
         spatial_dims = len(self.kernel_size)

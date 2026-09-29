@@ -82,7 +82,6 @@ class SoftmaxBase(Module):
         super().__init__(requires_grad=requires_grad)
         self._dim = dim
         # runtime variables
-        self._cache = {}
         self._output_kernels = output_kernels
 
     @property

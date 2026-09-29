@@ -62,7 +62,6 @@ class Clip(Module):
         self._min_val = None if min_val is None else float(min_val)
         self._max_val = None if max_val is None else float(max_val)
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
             config=self._config,

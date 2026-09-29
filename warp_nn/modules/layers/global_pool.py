@@ -44,8 +44,6 @@ class GlobalAvgPool(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # runtime variables
-        self._cache = {}
 
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the module.
@@ -88,8 +86,6 @@ class GlobalMaxPool(Module):
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """
         super().__init__(requires_grad=requires_grad)
-        # runtime variables
-        self._cache = {}
 
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the module.

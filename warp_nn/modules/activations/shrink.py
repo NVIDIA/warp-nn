@@ -65,7 +65,6 @@ class Shrink(Module):
         self._lambd = float(lambd)
         self._bias = float(bias)
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
             config=self._config, function=_create_function(lambd=self._lambd, bias=self._bias)

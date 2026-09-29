@@ -104,8 +104,6 @@ class LayerNorm(Module):
         # set default/initial values
         if initialize_parameters:
             self._initialize_parameters()
-        # runtime variables
-        self._cache = {}
 
     def _initialize_parameters(self):
         if self.weight:

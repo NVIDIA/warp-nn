@@ -77,7 +77,6 @@ class GELU(Module):
             raise ValueError(f"Unsupported GELU approximation '{approximate}' (supported: 'none', 'tanh')")
         self._approximate = approximate
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
             config=self._config, function=_create_function(approximate=self._approximate)

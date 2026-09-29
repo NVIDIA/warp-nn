@@ -44,7 +44,6 @@ class BitwiseXor(Module):
         """
         super().__init__(requires_grad=False)
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_binary_kernels(config=self._config, function=_create_function(), dtypes=INT_DTYPES)
 

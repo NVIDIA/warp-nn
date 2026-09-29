@@ -205,7 +205,6 @@ class LSTMCell(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernel = _create_kernels(self._config, include_bias=self.bias_ih is not None)
         self._slices = (

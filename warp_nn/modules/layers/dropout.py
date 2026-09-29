@@ -79,7 +79,6 @@ class Dropout(Module):
             raise ValueError(f"The dropout probability must be in the interval [0, 1], got {p}")
         self._p = p
         # runtime variables
-        self._cache = {}
         self._seed = wp.array([np.random.randint(0, 2**32, dtype=np.uint32)], dtype=wp.uint32, device=self.device)
 
     @property

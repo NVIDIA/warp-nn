@@ -62,7 +62,6 @@ class SELU(Module):
         self._scale = float(scale)
         self._alpha = float(alpha)
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
             config=self._config, function=_create_function(scale=self._scale, alpha=self._alpha)

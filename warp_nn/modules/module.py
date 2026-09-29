@@ -48,6 +48,8 @@ class Module(ABC):
         self._requires_grad: bool = requires_grad
         if not hasattr(self, "_device"):
             self._device: wp.Device = parse_device(None)
+        if not hasattr(self, "_cache"):
+            self._cache: dict[Any, Any] = {}
         if not hasattr(self, "_training"):
             self._training: bool = True
         if not hasattr(self, "_modules"):

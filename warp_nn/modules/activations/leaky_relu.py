@@ -57,7 +57,6 @@ class LeakyReLU(Module):
         super().__init__(requires_grad=requires_grad)
         self._negative_slope = float(negative_slope)
         # runtime variables
-        self._cache = {}
         self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
             config=self._config, function=_create_function(negative_slope=self._negative_slope)
