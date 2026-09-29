@@ -9,6 +9,7 @@ API Reference
     layers
     operators
     optimizers
+    runtime
     utils
 
 This section contains the API reference for the |warp-nn| library.
@@ -120,6 +121,8 @@ Operators
     Exp
     Floor
     Log
+    Max
+    Min
     Mul
     Neg
     Pow
@@ -142,3 +145,13 @@ Optimizers
 
     Adam
     SGD
+
+Runtime
+-------
+
+.. currentmodule:: warp_nn.runtime
+.. autosummary::
+    :nosignatures:
+
+    OnnxRuntimeV2
+    OnnxRuntime

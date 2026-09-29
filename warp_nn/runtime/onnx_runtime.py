@@ -15,6 +15,10 @@
 
 """Graph-capturable ONNX inference runtime for Warp-NN policy networks.
 
+.. deprecated:: 0.4.0
+
+    Use :class:`~warp_nn.runtime.OnnxRuntimeV2` instead.
+
 Only the ``onnx`` package (pure protobuf parser) is required -- no
 ``onnxruntime`` or ``torch``.  Weights are loaded once onto the target
 Warp device; inference executes a pre-built list of lightweight op
@@ -53,6 +57,8 @@ Example::
 from __future__ import annotations
 
 from typing import Any
+
+import warnings
 
 from dataclasses import dataclass, field
 
@@ -454,21 +460,20 @@ def _np_to_warp(arr_np: np.ndarray, device: wp.context.Device, requires_grad: bo
 class OnnxRuntime:
     """Lightweight ONNX inference engine for graph-capturable MLP policies.
 
-    Args:
-        path: Path to an ``.onnx`` file.
-        device: Warp device string (e.g. ``"cuda:0"``).  ``None`` uses the
-            current default device.
-        batch_size: Fixed batch dimension used to pre-allocate intermediate
-            buffers.  Defaults to ``1``.
-        input_batch_axes: Optional batch-axis override for graph inputs.  If
-            an integer is provided, it is applied to every graph input; if a
-            dictionary is provided, it maps graph input names to their batch
-            axis.  The selected axes are replaced with ``batch_size`` even
-            when the ONNX model exported them as fixed dimensions.
-        requires_grad: Whether runtime-owned tensors, including initializers
-            and intermediate buffers, should allocate gradient storage.  Keep
-            this disabled for inference/replay and enable it when computing
-            gradients through ONNX runtime outputs.
+    .. deprecated:: 0.4.0
+
+        Use :class:`~warp_nn.runtime.OnnxRuntimeV2` instead.
+
+    :param path: Path to an ``.onnx`` file.
+    :param device: Warp device string (e.g. ``"cuda:0"``). ``None`` uses the current default device.
+    :param batch_size: Fixed batch dimension used to pre-allocate intermediate buffers. Defaults to ``1``.
+    :param input_batch_axes: Optional batch-axis override for graph inputs. If an integer is provided, it is
+        applied to every graph input; if a dictionary is provided, it maps graph input names to their batch axis.
+        The selected axes are replaced with ``batch_size`` even when the ONNX model exported them as fixed
+        dimensions.
+    :param requires_grad: Whether runtime-owned tensors, including initializers and intermediate buffers, should
+        allocate gradient storage. Keep this disabled for inference/replay and enable it when computing gradients
+        through ONNX runtime outputs.
     """
 
     def __init__(
@@ -479,6 +484,11 @@ class OnnxRuntime:
         input_batch_axes: int | dict[str, int] | None = None,
         requires_grad: bool = False,
     ):
+        warnings.warn(
+            "OnnxRuntime is deprecated and will be removed in a future release. Use OnnxRuntimeV2 instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._device = parse_device(device)
         self._requires_grad = requires_grad
 
@@ -565,12 +575,10 @@ class OnnxRuntime:
     def __call__(self, inputs: dict[str, wp.array]) -> dict[str, wp.array]:
         """Run forward inference.
 
-        Args:
-            inputs: Mapping of ONNX input names to Warp arrays already on
-                the correct device.  2-D ``wp.array2d`` is the typical case.
+        :param inputs: Mapping of ONNX input names to Warp arrays already on the correct device. 2-D
+            ``wp.array2d`` is the typical case.
 
-        Returns:
-            Mapping of ONNX output names to Warp result arrays.
+        :return: Mapping of ONNX output names to Warp result arrays.
         """
         tensors = self._tensors
 

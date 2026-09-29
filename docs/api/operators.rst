@@ -25,6 +25,8 @@ Operators
     Exp <operators/exp>
     Floor <operators/floor>
     Log <operators/log>
+    Max <operators/max>
+    Min <operators/min>
     Mul <operators/mul>
     Neg <operators/neg>
     Pow <operators/pow>
@@ -67,6 +69,8 @@ The following table lists the available operators:
     Exp
     Floor
     Log
+    Max
+    Min
     Mul
     Neg
     Pow

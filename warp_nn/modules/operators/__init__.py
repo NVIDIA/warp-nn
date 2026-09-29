@@ -34,6 +34,8 @@ from warp_nn.modules.operators.erf import Erf
 from warp_nn.modules.operators.exp import Exp
 from warp_nn.modules.operators.floor import Floor
 from warp_nn.modules.operators.log import Log
+from warp_nn.modules.operators.max import Max
+from warp_nn.modules.operators.min import Min
 from warp_nn.modules.operators.mul import Mul
 from warp_nn.modules.operators.neg import Neg
 from warp_nn.modules.operators.pow import Pow

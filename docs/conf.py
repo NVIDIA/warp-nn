@@ -113,6 +113,10 @@ autodoc_member_order = "groupwise"
 autoclass_content = "init"
 autodoc_mock_imports = []
 
+# doctest ext
+# the docstring examples (plain doctest blocks) depend on test fixtures, so they are run by pytest instead
+doctest_test_doctest_blocks = ""
+
 # copybutton ext
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
 copybutton_prompt_is_regexp = True

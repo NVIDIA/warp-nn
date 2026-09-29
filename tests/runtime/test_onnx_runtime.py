@@ -31,6 +31,9 @@ from tests.utilities import check_arrays, is_device_available
 from warp_nn.runtime import OnnxRuntime
 
 
+pytestmark = pytest.mark.filterwarnings("ignore:OnnxRuntime is deprecated:DeprecationWarning")
+
+
 def _node_attrs(node) -> dict[str, float | int]:
     attrs: dict[str, float | int] = {}
     for attr in node.attribute:
@@ -336,6 +339,19 @@ def test_rejects_invalid_model(node):
     try:
         onnx.save(model, str(path))
         with pytest.raises(ValueError, match="OnnxRuntime: invalid ONNX model"):
+            OnnxRuntime(str(path), device="cpu")
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_deprecation_warning():
+    model = _build_mlp_policy_model((4, 8, 2), batch=1, seed=0)
+
+    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
+        path = Path(tmp.name)
+    try:
+        onnx.save(model, str(path))
+        with pytest.warns(DeprecationWarning, match="OnnxRuntimeV2"):
             OnnxRuntime(str(path), device="cpu")
     finally:
         path.unlink(missing_ok=True)

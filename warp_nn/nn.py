@@ -81,6 +81,8 @@ from warp_nn.modules.operators import (
     Exp,
     Floor,
     Log,
+    Max,
+    Min,
     Mul,
     Neg,
     Pow,
