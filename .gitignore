@@ -21,3 +21,6 @@ _build/
 
 # Test artifacts
 .hypothesis/
+.coverage
+coverage.xml
+pytest-report.xml

@@ -81,9 +81,20 @@ test-pytest:
     - pip install -e .[tests]
   script:
     - pytest tests/
+        --junitxml=pytest-report.xml
+        --cov=warp_nn --cov-report=term --cov-report=xml:coverage.xml
+  # extract the total coverage percentage (from the terminal report) to display it in the MR
+  coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?%)$/'
+  artifacts:
+    when: always  # upload the reports even if tests fail
+    reports:
+      junit: pytest-report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 30 days
   only:
     - main
-    - master
     - develop
     - tags
     - merge_requests
