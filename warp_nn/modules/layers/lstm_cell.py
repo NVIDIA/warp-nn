@@ -27,6 +27,10 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
 
     @wp.func
     def sigmoid(x: float):
+        # keep the exponent non-positive, since an overflowing exp() yields NaN gradients
+        if x < 0.0:
+            e = wp.exp(x)
+            return e / (1.0 + e)
         return 1.0 / (1.0 + wp.exp(-x))
 
     @wp.func
@@ -91,8 +95,11 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
             gate_hf += wp.tile_broadcast(wp.tile_load(bias_hf, shape=shape_b, offset=offset_b), shape=shape_T)
             gate_hg += wp.tile_broadcast(wp.tile_load(bias_hg, shape=shape_b, offset=offset_b), shape=shape_T)
             gate_ho += wp.tile_broadcast(wp.tile_load(bias_ho, shape=shape_b, offset=offset_b), shape=shape_T)
+        # HACK: the cell state is computed twice (for the output and for the hidden state), since Warp computes wrong
+        # gradients when the same tile is both used by another tile_map and stored transposed
         c = wp.tile_map(compute_cell_state, t_cell, gate_ii, gate_hi, gate_if, gate_hf, gate_ig, gate_hg)
-        h = wp.tile_map(compute_hidden_state, c, gate_io, gate_ho)
+        c_h = wp.tile_map(compute_cell_state, t_cell, gate_ii, gate_hi, gate_if, gate_hf, gate_ig, gate_hg)
+        h = wp.tile_map(compute_hidden_state, c_h, gate_io, gate_ho)
         wp.tile_store(output_hidden, wp.tile_transpose(h), offset=offset)
         wp.tile_store(output_cell, wp.tile_transpose(c), offset=offset)
 

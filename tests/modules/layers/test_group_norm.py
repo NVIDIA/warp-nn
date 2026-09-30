@@ -28,8 +28,10 @@ from .common import check_forward, check_gradients, check_initialize_parameters,
 _SHAPES = [(5, 6), (4, 6, 7), (3, 6, 4, 5)]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
 @pytest.mark.parametrize("num_groups", [1, 2, 3, 6])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -47,8 +49,10 @@ def test_forward(capsys, device, dtype, shape, num_groups, affine):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
 @pytest.mark.parametrize("num_groups", [1, 2, 3, 6])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -67,7 +71,9 @@ def test_gradients(capsys, device, dtype, shape, num_groups, affine):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad):
     if not utilities.is_device_available(device):
@@ -98,6 +104,9 @@ def test_invalid_arguments(capsys):
         nn.GroupNorm(4, 6)
     with pytest.raises(ValueError, match="divisible"):
         nn.GroupNorm(0, 6)
+
+
+def test_invalid_input(capsys):
     group_norm = nn.GroupNorm(2, 6).to("cpu")
     assert (group_norm.num_groups, group_norm.num_channels) == (2, 6)
     with pytest.raises(ValueError, match="shape"):

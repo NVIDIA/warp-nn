@@ -34,7 +34,9 @@ _MODULES = {
 _SHAPES = [(3, 4, 17), (2, 5, 1), (3, 4, 7, 9), (1, 2, 1, 1)]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("name", ["GlobalAvgPool", "GlobalMaxPool"])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -45,7 +47,9 @@ def test_forward(capsys, device, dtype, shape, name):
     check_forward(warp_module=warp_module(), torch_module=torch_module(1), device=device, dtype=dtype, shape=shape)
 
 
+# module-specific parameters
 @pytest.mark.parametrize("name", ["GlobalAvgPool", "GlobalMaxPool"])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -56,8 +60,10 @@ def test_gradients(capsys, device, dtype, shape, name):
     check_gradients(warp_module=warp_module(), torch_module=torch_module(1), device=device, dtype=dtype, shape=shape)
 
 
+# module-specific parameters
 @pytest.mark.parametrize("name", ["GlobalAvgPool", "GlobalMaxPool"])
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad, name):
     if not utilities.is_device_available(device):
@@ -70,6 +76,7 @@ def test_requires_grad(capsys, device, requires_grad, name):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("name", ["GlobalAvgPool", "GlobalMaxPool"])
 def test_invalid_input(capsys, name):
     module = _MODULES[(name, 4)][0]().to("cpu")

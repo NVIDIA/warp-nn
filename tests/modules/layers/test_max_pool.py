@@ -47,7 +47,9 @@ def _shape(spatial_dims):
     return [3, 4, 11] if spatial_dims == 1 else [3, 4, 11, 10]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims, kwargs", _CASES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_forward(capsys, device, dtype, spatial_dims, kwargs):
@@ -63,7 +65,9 @@ def test_forward(capsys, device, dtype, spatial_dims, kwargs):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims, kwargs", _CASES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_gradients(capsys, device, dtype, spatial_dims, kwargs):
@@ -79,19 +83,10 @@ def test_gradients(capsys, device, dtype, spatial_dims, kwargs):
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_special_values(capsys, device):
-    if not utilities.is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-    array = np.array([[[-np.inf, -np.inf, 1.0, np.nan, 2.0, 3.0]]], dtype=np.float32)
-    output = nn.MaxPool1D(2).to(device)(wp.array(array, device=device)).numpy()
-    torch_output = torch.nn.MaxPool1d(2)(torch.tensor(array)).numpy()
-    np.testing.assert_array_equal(output, torch_output)
-    np.testing.assert_array_equal(output, [[[-np.inf, np.nan, 3.0]]])
-
-
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims", [1, 2])
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad, spatial_dims):
     if not utilities.is_device_available(device):
@@ -104,7 +99,7 @@ def test_requires_grad(capsys, device, requires_grad, spatial_dims):
     )
 
 
-def test_arguments(capsys):
+def test_invalid_arguments(capsys):
     max_pool = nn.MaxPool2D(3, padding=1)
     assert max_pool.kernel_size == (3, 3)
     assert max_pool.stride == (3, 3)  # the kernel size by default
@@ -122,6 +117,7 @@ def test_arguments(capsys):
             nn.MaxPool1D(**kwargs)
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims", [1, 2])
 def test_invalid_input(capsys, spatial_dims):
     max_pool = _MODULES[spatial_dims][0](4).to("cpu")
@@ -131,6 +127,17 @@ def test_invalid_input(capsys, spatial_dims):
     # output too small
     with pytest.raises(ValueError, match="too small"):
         max_pool(wp.zeros([2, 2] + [3] * spatial_dims, dtype=wp.float32, device="cpu"))
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_special_values(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    array = np.array([[[-np.inf, -np.inf, 1.0, np.nan, 2.0, 3.0]]], dtype=np.float32)
+    output = nn.MaxPool1D(2).to(device)(wp.array(array, device=device)).numpy()
+    torch_output = torch.nn.MaxPool1d(2)(torch.tensor(array)).numpy()
+    np.testing.assert_array_equal(output, torch_output)
+    np.testing.assert_array_equal(output, [[[-np.inf, np.nan, 3.0]]])
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

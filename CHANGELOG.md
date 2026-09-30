@@ -2,19 +2,20 @@
 
 ## [0.4.0] - Unreleased
 ### Added
+- Add `Abs`, `Acos`, `Acosh`, `Add`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AvgPool1D`, `AvgPool2D`, `BatchNorm`,
+  `BitwiseAnd`, `BitwiseNot`, `BitwiseOr`, `BitwiseXor`, `Ceil`, `CELU`, `Clip`, `Cos`, `Cosh`, `Div`, `Dropout`,
+  `Erf`, `Exp`, `Floor`, `GELU`, `GlobalAvgPool`, `GlobalMaxPool`, `GroupNorm`, `GRU`, `HardSigmoid`, `HardSwish`,
+  `Identity`, `InstanceNorm`, `LayerNorm`, `Log`, `LogSoftmax`, `LSTM`, `Max`, `MaxPool1D`, `MaxPool2D`, `Min`, `Mish`,
+  `Mul`, `Neg`, `Pow`, `PReLU`, `Reciprocal`, `RMSNorm`, `RNN`, `Round`, `Shrink`, `Sign`, `Sin`, `Sinh`, `Softmax`,
+  `Sqrt`, `Sub`, `Swish`, `Tan` and `Threshold` modules
 - Add `Buffer` class and module buffers (non-learnable state arrays, such as running statistics)
 - Add training/evaluation modes to modules (`training` property, and `train()` and `eval()` methods)
 - Add the `requires_grad` constructor argument to modules that own parameters and/or cached output arrays,
   to control whether those arrays require gradients
 - Add the `initialize_parameters` constructor argument to layers that own parameters,
   to control whether those parameters are initialized with their default/initial values
-- Add `Abs`, `Acos`, `Acosh`, `Add`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AvgPool1D`, `AvgPool2D`, `BatchNorm`,
-  `BitwiseAnd`, `BitwiseNot`, `BitwiseOr`, `BitwiseXor`, `Ceil`, `CELU`, `Clip`, `Cos`, `Cosh`, `Div`, `Dropout`,
-  `Erf`, `Exp`, `Floor`, `GELU`, `GlobalAvgPool`, `GlobalMaxPool`, `GroupNorm`, `HardSigmoid`, `HardSwish`,
-  `Identity`, `InstanceNorm`, `LayerNorm`, `Log`, `LogSoftmax`, `Max`, `MaxPool1D`, `MaxPool2D`, `Min`, `Mish`, `Mul`,
-  `Neg`, `Pow`, `PReLU`, `Reciprocal`, `RMSNorm`, `Round`, `Shrink`, `Sign`, `Sin`, `Sinh`, `Softmax`, `Sqrt`, `Sub`,
-  `Swish`, `Tan` and `Threshold` modules
 - Add `OnnxRuntimeV2` ONNX inference runtime and mark `OnnxRuntime` as deprecated
+- Add `copy()` utility to copy (possibly non-contiguous) arrays with gradient propagation
 
 ### Changed
 - Update the minimum required Warp version to 1.15.0
@@ -25,6 +26,9 @@
   gradient clipping, and per-optimizer `eps`/`max_norm` handling
 - Fix numerical issues of activations: `ReLU` did not propagate NaN inputs, `Sigmoid` yielded NaN gradients
   for large negative inputs, and `Softplus` overflowed (with NaN gradients) for large positive inputs
+- Fix NaN gradients of `GRUCell` and `LSTMCell` for saturated gates (large negative pre-activations)
+- Fix wrong gradients of `LSTMCell` with respect to its hidden state output
+- Fix `kernel_config()` resetting the unspecified values to `None` (instead of keeping the enclosing/default ones)
 
 ## [0.3.1] - 2026-07-28
 ### Changed

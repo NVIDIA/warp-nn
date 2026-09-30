@@ -30,9 +30,11 @@ from .common import check_forward, check_gradients, check_initialize_parameters,
 _SHAPES = [((7, 16), 16), ((3, 5, 16), (16,)), ((4, 5, 6), (5, 6)), ((2, 3, 4, 5), (3, 4, 5)), ((33,), 33)]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("eps", [None, 1e-3])
 @pytest.mark.parametrize("elementwise_affine", [True, False])
 @pytest.mark.parametrize("shape, normalized_shape", _SHAPES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_forward(capsys, device, dtype, shape, normalized_shape, elementwise_affine, eps):
@@ -48,8 +50,10 @@ def test_forward(capsys, device, dtype, shape, normalized_shape, elementwise_aff
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("elementwise_affine", [True, False])
 @pytest.mark.parametrize("shape, normalized_shape", _SHAPES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_gradients(capsys, device, dtype, shape, normalized_shape, elementwise_affine):
@@ -65,7 +69,9 @@ def test_gradients(capsys, device, dtype, shape, normalized_shape, elementwise_a
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad):
     if not utilities.is_device_available(device):
@@ -89,12 +95,12 @@ def test_initialize_parameters(capsys, device):
     )
 
 
-def test_default_eps(capsys):
-    assert nn.RMSNorm(4).eps == np.finfo(np.float32).eps
-    assert nn.RMSNorm(4, eps=1e-5).eps == 1e-5
-
-
 def test_invalid_input(capsys):
     rms_norm = nn.RMSNorm((4, 5)).to("cpu")
     with pytest.raises(ValueError, match="normalized shape"):
         rms_norm(wp.zeros((4, 5, 4), dtype=wp.float32, device="cpu"))
+
+
+def test_default_eps(capsys):
+    assert nn.RMSNorm(4).eps == np.finfo(np.float32).eps
+    assert nn.RMSNorm(4, eps=1e-5).eps == 1e-5

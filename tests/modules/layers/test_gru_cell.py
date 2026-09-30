@@ -19,19 +19,19 @@ import pytest
 
 import torch
 
+import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward_rnn_cell, check_initialize_parameters, check_requires_grad
+from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
 
 
 @hypothesis.given(
     batch_size=st.integers(min_value=1, max_value=100),
     input_size=st.integers(min_value=1, max_value=100),
     hidden_size=st.integers(min_value=1, max_value=100),
-    sequence_length=st.integers(min_value=1, max_value=100),
 )
 @hypothesis.settings(
     suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
@@ -42,20 +42,43 @@ from .common import check_forward_rnn_cell, check_initialize_parameters, check_r
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 # test-specific parameters
-@pytest.mark.parametrize("ndim", [2])
-@pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_forward(capsys, device, dtype, ndim, bias, batch_size, input_size, hidden_size, sequence_length):
+def test_forward(capsys, device, bias, batch_size, input_size, hidden_size):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_forward_rnn_cell(
+    check_forward_rnn(
         warp_module=nn.GRUCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         torch_module=torch.nn.GRUCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         device=device,
-        dtype=dtype,
-        shape=[sequence_length, batch_size, input_size],
-        hidden_shape=[batch_size, hidden_size],
-        cell_shape=None,
+        shape=[batch_size, input_size],
+        hidden_shapes=[[batch_size, hidden_size]],
+    )
+
+
+@hypothesis.given(
+    batch_size=st.integers(min_value=1, max_value=100),
+    input_size=st.integers(min_value=1, max_value=100),
+    hidden_size=st.integers(min_value=1, max_value=100),
+)
+@hypothesis.settings(
+    suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
+    deadline=None,
+    max_examples=15,
+    phases=[hypothesis.Phase.explicit, hypothesis.Phase.reuse, hypothesis.Phase.generate],
+)
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_gradients(capsys, device, bias, batch_size, input_size, hidden_size):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_gradients_rnn(
+        warp_module=nn.GRUCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
+        torch_module=torch.nn.GRUCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
+        device=device,
+        shape=[batch_size, input_size],
+        hidden_shapes=[[batch_size, hidden_size]],
     )
 
 
@@ -90,3 +113,19 @@ def test_initialize_parameters(capsys, device, bias):
         module_kwargs={"input_size": 8, "hidden_size": 4, "bias": bias},
         device=device,
     )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_saturated_gradients(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # large inputs saturate the gates (e.g. sigmoid(-1000)), whose gradients must not overflow (NaN)
+    module = nn.GRUCell(input_size=8, hidden_size=4).to(device)
+    input = wp.array(1000.0 * utilities.sample_array([2, 8]), device=device, requires_grad=True)
+    hidden = wp.array(utilities.sample_array([2, 4]), device=device, requires_grad=True)
+    tape = wp.Tape()
+    with tape:
+        output = module(input, hidden)
+    tape.backward(grads={output: wp.ones_like(output)})
+    for array in [input, hidden, *module.parameters()]:
+        assert np.isfinite(array.grad.numpy()).all()

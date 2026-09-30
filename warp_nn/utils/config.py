@@ -63,20 +63,23 @@ def kernel_config(
     tile_3d: tuple[int, int, int] | None = None,
     tile_4d: tuple[int, int, int, int] | None = None,
 ) -> Generator[None, None, None]:
-    """Context manager that sets a thread-local configuration values."""
+    """Context manager that sets a thread-local configuration values.
+
+    Unspecified (``None``) values are inherited from the enclosing context (or the default values).
+    """
     # store previous context values
     previous_block_dim = getattr(_context, "block_dim", None)
     previous_tile_1d = getattr(_context, "tile_1d", None)
     previous_tile_2d = getattr(_context, "tile_2d", None)
     previous_tile_3d = getattr(_context, "tile_3d", None)
     previous_tile_4d = getattr(_context, "tile_4d", None)
-    # set new context values
+    # set new context values (keeping the previous ones for the unspecified values)
     try:
-        _context.block_dim = block_dim
-        _context.tile_1d = tile_1d
-        _context.tile_2d = tile_2d
-        _context.tile_3d = tile_3d
-        _context.tile_4d = tile_4d
+        _context.block_dim = previous_block_dim if block_dim is None else block_dim
+        _context.tile_1d = previous_tile_1d if tile_1d is None else tile_1d
+        _context.tile_2d = previous_tile_2d if tile_2d is None else tile_2d
+        _context.tile_3d = previous_tile_3d if tile_3d is None else tile_3d
+        _context.tile_4d = previous_tile_4d if tile_4d is None else tile_4d
         yield
     # remove context value or restore previous one if it exists
     finally:
@@ -89,10 +92,11 @@ def kernel_config(
 
 def get_kernel_config() -> KernelConfig:
     """Get the current configuration."""
+    # context values are None outside of any context (after exiting the outermost one)
     return KernelConfig(
-        block_dim=getattr(_context, "block_dim", _BLOCK_DIM),
-        tile_1d=getattr(_context, "tile_1d", _TILE_1D),
-        tile_2d=getattr(_context, "tile_2d", _TILE_2D),
-        tile_3d=getattr(_context, "tile_3d", _TILE_3D),
-        tile_4d=getattr(_context, "tile_4d", _TILE_4D),
+        block_dim=_BLOCK_DIM if (value := getattr(_context, "block_dim", None)) is None else value,
+        tile_1d=_TILE_1D if (value := getattr(_context, "tile_1d", None)) is None else value,
+        tile_2d=_TILE_2D if (value := getattr(_context, "tile_2d", None)) is None else value,
+        tile_3d=_TILE_3D if (value := getattr(_context, "tile_3d", None)) is None else value,
+        tile_4d=_TILE_4D if (value := getattr(_context, "tile_4d", None)) is None else value,
     )

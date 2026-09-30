@@ -81,15 +81,18 @@ Layers
     GlobalAvgPool
     GlobalMaxPool
     GroupNorm
+    GRU
     GRUCell
     Identity
     InstanceNorm
     LayerNorm
     Linear
+    LSTM
     LSTMCell
     MaxPool1D
     MaxPool2D
     RMSNorm
+    RNN
     RNNCell
     Sequential
 

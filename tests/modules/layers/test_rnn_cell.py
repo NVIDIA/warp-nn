@@ -24,14 +24,13 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward_rnn_cell, check_initialize_parameters, check_requires_grad
+from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
 
 
 @hypothesis.given(
     batch_size=st.integers(min_value=1, max_value=100),
     input_size=st.integers(min_value=1, max_value=100),
     hidden_size=st.integers(min_value=1, max_value=100),
-    sequence_length=st.integers(min_value=1, max_value=100),
 )
 @hypothesis.settings(
     suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
@@ -42,22 +41,43 @@ from .common import check_forward_rnn_cell, check_initialize_parameters, check_r
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 # test-specific parameters
-@pytest.mark.parametrize("ndim", [2])
-@pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_forward(capsys, device, dtype, ndim, bias, batch_size, input_size, hidden_size, sequence_length):
+def test_forward(capsys, device, bias, batch_size, input_size, hidden_size):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    check_forward_rnn_cell(
+    check_forward_rnn(
         warp_module=nn.RNNCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         torch_module=torch.nn.RNNCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         device=device,
-        dtype=dtype,
-        shape=[sequence_length, batch_size, input_size],
-        hidden_shape=[batch_size, hidden_size],
-        cell_shape=None,
-        atol=1e-01,
-        rtol=1e-02,
+        shape=[batch_size, input_size],
+        hidden_shapes=[[batch_size, hidden_size]],
+    )
+
+
+@hypothesis.given(
+    batch_size=st.integers(min_value=1, max_value=100),
+    input_size=st.integers(min_value=1, max_value=100),
+    hidden_size=st.integers(min_value=1, max_value=100),
+)
+@hypothesis.settings(
+    suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
+    deadline=None,
+    max_examples=15,
+    phases=[hypothesis.Phase.explicit, hypothesis.Phase.reuse, hypothesis.Phase.generate],
+)
+# module-specific parameters
+@pytest.mark.parametrize("bias", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_gradients(capsys, device, bias, batch_size, input_size, hidden_size):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_gradients_rnn(
+        warp_module=nn.RNNCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
+        torch_module=torch.nn.RNNCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
+        device=device,
+        shape=[batch_size, input_size],
+        hidden_shapes=[[batch_size, hidden_size]],
     )
 
 

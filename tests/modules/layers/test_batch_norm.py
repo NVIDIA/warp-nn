@@ -38,8 +38,10 @@ def _train_both(warp_module, torch_module, *, shape, device, steps: int = 3):
         torch_module(torch.tensor(array.astype(np.float32), device=device))
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
 @pytest.mark.parametrize("track_running_stats", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -56,7 +58,9 @@ def test_forward(capsys, device, dtype, shape, track_running_stats, affine):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -73,7 +77,54 @@ def test_gradients(capsys, device, dtype, shape, affine):
     )
 
 
+# module-specific parameters
+@pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_requires_grad(capsys, device, requires_grad):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_requires_grad(
+        warp_module=nn.BatchNorm(4, requires_grad=requires_grad),
+        device=device,
+        inputs=[wp.array(utilities.sample_array([2, 4, 3]), device=device, requires_grad=True)],
+        requires_grad=requires_grad,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_initialize_parameters(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_initialize_parameters(module_type=nn.BatchNorm, module_kwargs={"num_features": 4}, device=device)
+    # the buffers are always initialized
+    module = nn.BatchNorm(4, initialize_parameters=False).to(device)
+    assert module.running_mean.data.numpy().tolist() == [0.0] * 4
+    assert module.running_var.data.numpy().tolist() == [1.0] * 4
+    # the default/initial values match PyTorch
+    utilities.check_arrays(
+        list(torch.nn.BatchNorm1d(4).parameters()), nn.BatchNorm(4).to(device).parameters(), test="equal"
+    )
+
+
+def test_invalid_input(capsys):
+    batch_norm = nn.BatchNorm(4).to("cpu")
+    assert batch_norm.training
+    with pytest.raises(ValueError, match="shape"):
+        batch_norm(wp.zeros((2, 3), dtype=wp.float32, device="cpu"))
+    with pytest.raises(ValueError, match="shape"):
+        batch_norm(wp.zeros((4,), dtype=wp.float32, device="cpu"))
+    # a single value per channel in training mode
+    with pytest.raises(ValueError, match="more than 1 value per channel"):
+        batch_norm(wp.zeros((1, 4), dtype=wp.float32, device="cpu"))
+    with pytest.raises(ValueError, match="more than 1 value per channel"):
+        batch_norm(wp.zeros((1, 4, 1), dtype=wp.float32, device="cpu"))
+    batch_norm.eval()(wp.zeros((1, 4), dtype=wp.float32, device="cpu"))
+
+
+# module-specific parameters
 @pytest.mark.parametrize("momentum", [0.1, 0.5])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_running_stats(capsys, device, shape, momentum):
@@ -135,49 +186,6 @@ def test_buffers(capsys, device):
     # the loaded running mean is used for normalization in evaluation mode
     output = module.eval()(wp.array(np.tile(running_mean, (2, 1)), dtype=wp.float32, device=device))
     np.testing.assert_allclose(output.numpy(), np.zeros((2, 3)), atol=1e-6)
-
-
-@pytest.mark.parametrize("requires_grad", [True, False])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_requires_grad(capsys, device, requires_grad):
-    if not utilities.is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-    check_requires_grad(
-        warp_module=nn.BatchNorm(4, requires_grad=requires_grad),
-        device=device,
-        inputs=[wp.array(utilities.sample_array([2, 4, 3]), device=device, requires_grad=True)],
-        requires_grad=requires_grad,
-    )
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_initialize_parameters(capsys, device):
-    if not utilities.is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-    check_initialize_parameters(module_type=nn.BatchNorm, module_kwargs={"num_features": 4}, device=device)
-    # the buffers are always initialized
-    module = nn.BatchNorm(4, initialize_parameters=False).to(device)
-    assert module.running_mean.data.numpy().tolist() == [0.0] * 4
-    assert module.running_var.data.numpy().tolist() == [1.0] * 4
-    # the default/initial values match PyTorch
-    utilities.check_arrays(
-        list(torch.nn.BatchNorm1d(4).parameters()), nn.BatchNorm(4).to(device).parameters(), test="equal"
-    )
-
-
-def test_invalid_input(capsys):
-    batch_norm = nn.BatchNorm(4).to("cpu")
-    assert batch_norm.training
-    with pytest.raises(ValueError, match="shape"):
-        batch_norm(wp.zeros((2, 3), dtype=wp.float32, device="cpu"))
-    with pytest.raises(ValueError, match="shape"):
-        batch_norm(wp.zeros((4,), dtype=wp.float32, device="cpu"))
-    # a single value per channel in training mode
-    with pytest.raises(ValueError, match="more than 1 value per channel"):
-        batch_norm(wp.zeros((1, 4), dtype=wp.float32, device="cpu"))
-    with pytest.raises(ValueError, match="more than 1 value per channel"):
-        batch_norm(wp.zeros((1, 4, 1), dtype=wp.float32, device="cpu"))
-    batch_norm.eval()(wp.zeros((1, 4), dtype=wp.float32, device="cpu"))
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

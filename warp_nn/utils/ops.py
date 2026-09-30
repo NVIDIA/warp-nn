@@ -49,6 +49,25 @@ def _copy_4d(input: wp.array4d[Any], output: wp.array4d[Any]):
 _COPY_KERNELS = {1: _copy_1d, 2: _copy_2d, 3: _copy_3d, 4: _copy_4d}
 
 
+def copy(input: wp.array, output: wp.array) -> wp.array:
+    """Copy an array into another array with the same shape (any of them can be non-contiguous).
+
+    Unlike ``wp.copy()``, the copy is always recorded on the active tape (if any) as a kernel launch,
+    so that the gradients of the output array are accumulated (rather than assigned) into the input array.
+
+    :param input: The source array.
+    :param output: The destination array.
+
+    :return: The destination array.
+
+    :raises ValueError: If the arrays have different shapes.
+    """
+    if input.shape != output.shape:
+        raise ValueError(f"Expected arrays with the same shape, got {input.shape} and {output.shape}")
+    wp.launch(_COPY_KERNELS[input.ndim], dim=input.shape, inputs=[input], outputs=[output], device=input.device)
+    return output
+
+
 def contiguous(array: wp.array) -> wp.array:
     """Get a contiguous version of an array (e.g. to reshape it).
 
@@ -61,9 +80,7 @@ def contiguous(array: wp.array) -> wp.array:
     """
     if array.is_contiguous:
         return array
-    output = wp.empty(array.shape, dtype=array.dtype, device=array.device, requires_grad=array.requires_grad)
-    wp.launch(_COPY_KERNELS[array.ndim], dim=array.shape, inputs=[array], outputs=[output], device=array.device)
-    return output
+    return copy(array, wp.empty(array.shape, dtype=array.dtype, device=array.device, requires_grad=array.requires_grad))
 
 
 def resolve_dim(

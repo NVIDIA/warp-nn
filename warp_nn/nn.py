@@ -35,6 +35,9 @@ from warp_nn.modules.activations import (
 )
 from warp_nn.modules.buffer import Buffer
 from warp_nn.modules.layers import (
+    GRU,
+    LSTM,
+    RNN,
     AvgPool1D,
     AvgPool2D,
     BatchNorm,

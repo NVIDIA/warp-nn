@@ -30,6 +30,7 @@ from tests.utilities import is_device_available
 from warp_nn import nn
 from warp_nn.modules import activations, layers, operators
 from warp_nn.runtime import OnnxRuntimeV2, OnnxTensorSpec
+from warp_nn.utils import kernel_config
 
 
 _OPSET = 24
@@ -346,7 +347,7 @@ _CASES = {
     # recurrent layers
     "RNN": _Case(
         "RNN",
-        (layers.RNNCell,),
+        (layers.RNN,),
         {"x": _uniform((3, 2, 5)), "initial_h": _uniform((1, 2, 4))},
         _recurrent_constants(1, 1, 5, 4),
         attributes={"hidden_size": 4},
@@ -355,7 +356,7 @@ _CASES = {
     ),
     "GRU_bidirectional": _Case(
         "GRU",
-        (layers.GRUCell, layers.GRUCell),
+        (layers.GRU,),
         {"x": _uniform((3, 2, 5))},
         _recurrent_constants(3, 2, 5, 4),
         attributes={"hidden_size": 4, "direction": "bidirectional", "linear_before_reset": 1},
@@ -363,16 +364,33 @@ _CASES = {
     ),
     "LSTM_reverse": _Case(
         "LSTM",
-        (layers.LSTMCell,),
+        (layers.LSTM,),
         {"x": _uniform((3, 2, 5)), "initial_h": _uniform((1, 2, 4)), "initial_c": _uniform((1, 2, 4))},
         _recurrent_constants(4, 1, 5, 4),
         attributes={"hidden_size": 4, "direction": "reverse"},
         node_inputs=("x", "W", "R", "B", "", "initial_h", "initial_c"),
         outputs=("y", "y_h", "y_c"),
     ),
+    "GRU_reverse": _Case(
+        "GRU",
+        (layers.GRU,),
+        {"x": _uniform((3, 2, 5))},
+        _recurrent_constants(3, 1, 5, 4),
+        attributes={"hidden_size": 4, "direction": "reverse", "linear_before_reset": 1},
+        outputs=("y", "y_h"),
+    ),
+    "LSTM_bidirectional": _Case(
+        "LSTM",
+        (layers.LSTM,),
+        {"x": _uniform((3, 2, 5)), "initial_h": _uniform((2, 2, 4))},
+        _recurrent_constants(4, 2, 5, 4),
+        attributes={"hidden_size": 4, "direction": "bidirectional"},
+        node_inputs=("x", "W", "R", "B", "", "initial_h"),
+        outputs=("y", "y_h", "y_c"),
+    ),
     "LSTM_final_state_only": _Case(
         "LSTM",
-        (layers.LSTMCell,),
+        (layers.LSTM,),
         {"x": _uniform((3, 2, 5))},
         {k: v for k, v in _recurrent_constants(4, 1, 5, 4).items() if k != "B"},
         attributes={"hidden_size": 4},
@@ -384,7 +402,7 @@ _CASES = {
 
 def test_all_modules_are_covered():
     """Every activation, operator and layer module (except containers and lazy variants) is used by some case."""
-    excluded = {layers.LazyLinear, layers.Sequential}
+    excluded = {layers.LazyLinear, layers.Sequential, layers.RNNCell, layers.GRUCell, layers.LSTMCell}
     exported = {
         cls
         for package in (activations, operators, layers)
@@ -578,6 +596,98 @@ def test_gradients(tmp_path, device):
     first_layer = runtime._operations[0].module
     np.testing.assert_allclose(first_layer.weight.data.grad.numpy(), weights["w1"].grad.numpy(), **tolerances)
     np.testing.assert_allclose(first_layer.bias.data.grad.numpy()[:, 0], weights["b1"].grad.numpy(), **tolerances)
+
+
+_TORCH_GATE_ORDER = {"RNN": (0,), "GRU": (1, 0, 2), "LSTM": (0, 2, 3, 1)}  # ONNX gate indices in PyTorch order
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
+@pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
+@pytest.mark.parametrize("variant", ["full", "defaults", "partial_states"])  # (initial states, bias)
+def test_recurrent_gradients(tmp_path, device, op_type, direction, variant):
+    torch = pytest.importorskip("torch")
+    _skip_if_unavailable(device)
+    if variant == "partial_states" and op_type != "LSTM":
+        pytest.skip("only the LSTM has more than one initial state")
+    gates = {"RNN": 1, "GRU": 3, "LSTM": 4}[op_type]
+    directions = 2 if direction == "bidirectional" else 1
+    input_size, hidden_size, seq_length, batch = 5, 4, 3, 2
+    constants = _recurrent_constants(gates, directions, input_size, hidden_size)
+    if variant == "defaults":
+        del constants["B"]
+    attributes = {"hidden_size": hidden_size, "direction": direction}
+    if op_type == "GRU":
+        attributes["linear_before_reset"] = 1
+    states = {"full": ["initial_h", "initial_c"], "defaults": [], "partial_states": ["initial_h"]}[variant]
+    states = [name for name in states if op_type == "LSTM" or name == "initial_h"]
+    inputs = {"x": _uniform((seq_length, batch, input_size))} | {
+        name: _uniform((directions, batch, hidden_size)) for name in states
+    }
+    node = helper.make_node(
+        op_type,
+        ["x", "W", "R", "B" if "B" in constants else "", "", *states],
+        ["y", "y_h", *(["y_c"] if op_type == "LSTM" else [])],
+        **attributes,
+    )
+    model = _make_model([node], inputs, {name: np.float32 for name in node.output}, constants)
+    # smaller tiles, since the LSTM backward pass of the default ones requires more shared memory than available
+    with kernel_config(tile_2d=(16, 16)):
+        runtime = _load(tmp_path, model, device, requires_grad=True)
+
+    arrays = {name: wp.array(value, device=device, requires_grad=True) for name, value in inputs.items()}
+    tape = wp.Tape()
+    with tape:
+        outputs = runtime(arrays)
+    tape.backward(grads={array: wp.ones_like(array) for array in outputs.values()})
+
+    # PyTorch reference (a reverse-only ONNX node is a unidirectional module applied to the time-reversed sequence)
+    order = _TORCH_GATE_ORDER[op_type]
+
+    def reorder(value):
+        return np.concatenate([value[i * hidden_size : (i + 1) * hidden_size] for i in order])
+
+    module = getattr(torch.nn, op_type)(
+        input_size, hidden_size, bias="B" in constants, bidirectional=direction == "bidirectional"
+    ).double()
+    torch_inputs = {name: torch.tensor(value, dtype=torch.double, requires_grad=True) for name, value in inputs.items()}
+    with torch.no_grad():
+        for d in range(directions):
+            suffix = "_reverse" if d else ""
+            values = {
+                f"weight_ih_l0{suffix}": reorder(constants["W"][d]),
+                f"weight_hh_l0{suffix}": reorder(constants["R"][d]),
+            }
+            if "B" in constants:
+                bias_ih, bias_hh = np.split(constants["B"][d], 2)
+                values |= {f"bias_ih_l0{suffix}": reorder(bias_ih), f"bias_hh_l0{suffix}": reorder(bias_hh)}
+            for name, value in values.items():
+                getattr(module, name).copy_(torch.tensor(value))
+    x = torch_inputs["x"]
+    if direction == "reverse":
+        # process the flipped sequence with a unidirectional module
+        x = x.flip(0)
+    hidden = tuple(
+        torch_inputs[name] if name in states else torch.zeros(directions, batch, hidden_size, dtype=torch.double)
+        for name in ("initial_h", "initial_c")[: 2 if op_type == "LSTM" else 1]
+    )
+    if not states:
+        hidden = None
+    elif op_type != "LSTM":
+        hidden = hidden[0]
+    y, final = module(x, hidden)
+    if direction == "reverse":
+        y = y.flip(0)
+    (y.sum() + sum(state.sum() for state in (final if op_type == "LSTM" else (final,)))).backward()
+
+    for name in ("x", *states):
+        np.testing.assert_allclose(arrays[name].grad.numpy(), torch_inputs[name].grad.numpy(), rtol=1.0e-3, atol=1.0e-4)
+    cell_module = runtime._operations[0].module
+    for name, parameter in cell_module.named_parameters():
+        expected = getattr(module, name).grad.numpy()
+        np.testing.assert_allclose(
+            parameter.data.grad.numpy().reshape(expected.shape), expected, rtol=1.0e-3, atol=1.0e-4
+        )
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -838,10 +948,6 @@ _UNSUPPORTED = {
         _Case("Identity", (), {"x": _uniform((2,))}, {"c": np.array(1.0, np.float32)}, node_inputs=("c",)),
         "scalar constant 'c'",
     ),
-    "recurrent_gradients": (
-        _Case("RNN", (), {"x": _uniform((3, 2, 5))}, _recurrent_constants(1, 1, 5, 4), attributes={"hidden_size": 4}),
-        "gradients",
-    ),
     "constant_only_operands": (
         _Case("Add", (), {"x": _uniform((2,))}, {"a": _uniform((2,)), "b": _uniform((2,))}, node_inputs=("a", "b")),
         "only constant inputs",
@@ -853,7 +959,7 @@ _UNSUPPORTED = {
 def test_rejects_unsupported_models(tmp_path, case_id):
     case, message = _UNSUPPORTED[case_id]
     with pytest.raises(NotImplementedError, match=message):
-        _load(tmp_path, case.model(), "cpu", requires_grad=case_id == "recurrent_gradients")
+        _load(tmp_path, case.model(), "cpu")
 
 
 # models whose (static) input shapes do not match their weights, which is only detected when running them

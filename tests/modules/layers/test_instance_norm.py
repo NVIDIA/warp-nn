@@ -29,7 +29,9 @@ _TORCH_MODULES = {3: torch.nn.InstanceNorm1d, 4: torch.nn.InstanceNorm2d}
 _SHAPES = [(4, 6, 7), (3, 5, 4, 5), (1, 2, 16)]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -45,7 +47,9 @@ def test_forward(capsys, device, dtype, shape, affine):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("affine", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -62,7 +66,9 @@ def test_gradients(capsys, device, dtype, shape, affine):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad):
     if not utilities.is_device_available(device):

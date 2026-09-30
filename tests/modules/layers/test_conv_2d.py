@@ -217,3 +217,10 @@ def test_initialize_parameters(capsys, device, bias):
         module_kwargs={"in_channels": 3, "out_channels": 6, "kernel_size": 3, "bias": bias},
         device=device,
     )
+
+
+def test_invalid_arguments(capsys):
+    with pytest.raises(ValueError, match="in_channels"):
+        nn.Conv2D(in_channels=4, out_channels=6, kernel_size=3, groups=3)
+    with pytest.raises(ValueError, match="out_channels"):
+        nn.Conv2D(in_channels=6, out_channels=4, kernel_size=3, groups=3)

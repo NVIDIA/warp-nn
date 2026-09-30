@@ -47,7 +47,9 @@ def _shape(spatial_dims):
     return [3, 4, 11] if spatial_dims == 1 else [3, 4, 11, 10]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims, kwargs", _CASES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_forward(capsys, device, dtype, spatial_dims, kwargs):
@@ -63,7 +65,9 @@ def test_forward(capsys, device, dtype, spatial_dims, kwargs):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims, kwargs", _CASES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_gradients(capsys, device, dtype, spatial_dims, kwargs):
@@ -79,8 +83,10 @@ def test_gradients(capsys, device, dtype, spatial_dims, kwargs):
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims", [1, 2])
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad, spatial_dims):
     if not utilities.is_device_available(device):
@@ -93,7 +99,7 @@ def test_requires_grad(capsys, device, requires_grad, spatial_dims):
     )
 
 
-def test_arguments(capsys):
+def test_invalid_arguments(capsys):
     avg_pool = nn.AvgPool1D(3, stride=2)
     assert (avg_pool.kernel_size, avg_pool.stride, avg_pool.padding) == ((3,), (2,), (0,))
     assert not avg_pool.ceil_mode and avg_pool.count_include_pad
@@ -107,6 +113,7 @@ def test_arguments(capsys):
             nn.AvgPool2D(**kwargs)
 
 
+# module-specific parameters
 @pytest.mark.parametrize("spatial_dims", [1, 2])
 def test_invalid_input(capsys, spatial_dims):
     avg_pool = _MODULES[spatial_dims][0](4).to("cpu")

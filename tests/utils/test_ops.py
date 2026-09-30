@@ -20,7 +20,7 @@ import pytest
 import numpy as np
 import warp as wp
 
-from warp_nn.utils import contiguous, overload_kernels
+from warp_nn.utils import contiguous, copy, overload_kernels
 
 from .. import utilities
 
@@ -90,3 +90,32 @@ def test_contiguous(capsys, device, ndim):
     expected = np.zeros_like(base_array)
     expected[..., ::2] = weights
     np.testing.assert_array_equal(base.grad.numpy(), expected)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_copy(capsys, device, ndim):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    base_array = np.random.rand(*[4] * (ndim - 1), 8).astype(np.float32)
+    base = wp.array(base_array, device=device, requires_grad=True)
+    output = wp.zeros([4] * (ndim - 1) + [4], device=device, requires_grad=True)
+    # copy a non-contiguous view (every other element of the last dimension) into the output,
+    # and use the view elsewhere too, to check that the gradients are accumulated (rather than assigned)
+    view = base[(slice(None),) * (ndim - 1) + (slice(None, None, 2),)]
+    other = wp.zeros_like(output)
+    tape = wp.Tape()
+    with tape:
+        assert copy(view, output) is output
+        copy(view, other)
+    np.testing.assert_array_equal(output.numpy(), base_array[..., ::2])
+    weights = np.random.rand(*output.shape).astype(np.float32)
+    tape.backward(grads={output: wp.array(weights, device=device), other: wp.array(weights, device=device)})
+    expected = np.zeros_like(base_array)
+    expected[..., ::2] = 2 * weights
+    np.testing.assert_allclose(base.grad.numpy(), expected)
+
+
+def test_copy_errors(capsys):
+    with pytest.raises(ValueError):
+        copy(wp.zeros((4, 4), device="cpu"), wp.zeros((2, 2), device="cpu"))

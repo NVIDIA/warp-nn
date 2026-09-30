@@ -29,17 +29,20 @@ Layers
     GlobalAvgPool <layers/global_avg_pool>
     GlobalMaxPool <layers/global_max_pool>
     GroupNorm <layers/group_norm>
+    GRU <layers/gru>
     GRUCell <layers/gru_cell>
     Identity <layers/identity>
     InstanceNorm <layers/instance_norm>
     LayerNorm <layers/layer_norm>
     Linear <layers/linear>
+    LSTM <layers/lstm>
     LSTMCell <layers/lstm_cell>
     MaxPool1D <layers/max_pool_1d>
     MaxPool2D <layers/max_pool_2d>
     Module <layers/module>
     Parameter <layers/parameter>
     RMSNorm <layers/rms_norm>
+    RNN <layers/rnn>
     RNNCell <layers/rnn_cell>
     Sequential <layers/sequential>
 
@@ -61,14 +64,17 @@ The following table lists the available layers:
     GlobalAvgPool
     GlobalMaxPool
     GroupNorm
+    GRU
     GRUCell
     Identity
     InstanceNorm
     LayerNorm
     Linear
+    LSTM
     LSTMCell
     MaxPool1D
     MaxPool2D
     RMSNorm
+    RNN
     RNNCell
     Sequential

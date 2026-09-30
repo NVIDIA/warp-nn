@@ -47,6 +47,41 @@ def _loss_4d(a: wp.array4d[Any], loss: wp.array1d[wp.float32]):
     wp.atomic_add(loss, 0, loss.dtype(a[i, j, k, l]))
 
 
+def _flatten(data) -> list:
+    # flatten (possibly nested) tuples of arrays, such as the outputs of the LSTM module: (output, (hidden, cell))
+    return [item for element in data for item in _flatten(element)] if isinstance(data, tuple) else [data]
+
+
+def _run_rnn(*, warp_module, torch_module, device, shape, hidden_shapes: list | None):
+    # run the forward pass of a recurrent module (cell or multi-layer) and its PyTorch counterpart, where
+    # hidden_shapes is the shape of each initial state (hidden state and, for LSTM, cell state), or None to use
+    # the default (zeros) initial states. Return the inputs, initial states and (flattened) outputs of both,
+    # as well as the tape recording the Warp forward pass
+    # move modules to target device
+    warp_module.to(device)
+    torch_module.to(device)
+    # init parameters to same values
+    utilities.init_parameters(torch_module.parameters())
+    utilities.init_parameters(warp_module.parameters(as_array=True))
+    # create inputs
+    array = utilities.sample_array(shape)
+    torch_input = torch.tensor(array, device=device, requires_grad=True)
+    warp_input = wp.array(array, device=device, requires_grad=True)
+    torch_hidden, warp_hidden = None, None
+    if hidden_shapes is not None:
+        arrays = [utilities.sample_array(hidden_shape) for hidden_shape in hidden_shapes]
+        torch_hidden = tuple(torch.tensor(array, device=device, requires_grad=True) for array in arrays)
+        warp_hidden = tuple(wp.array(array, device=device, requires_grad=True) for array in arrays)
+        if len(arrays) == 1:
+            torch_hidden, warp_hidden = torch_hidden[0], warp_hidden[0]
+    # forward pass
+    torch_outputs = _flatten(torch_module(torch_input, torch_hidden))
+    tape = wp.Tape()
+    with tape:
+        warp_outputs = _flatten(warp_module(warp_input, warp_hidden))
+    return (torch_input, torch_hidden, torch_outputs), (warp_input, warp_hidden, warp_outputs), tape
+
+
 def check_forward(*, warp_module, torch_module, device, dtype, shape, rtol: float = 1e-02, atol: float = 1e-03):
     # move modules to target device
     warp_module.to(device)
@@ -63,62 +98,6 @@ def check_forward(*, warp_module, torch_module, device, dtype, shape, rtol: floa
     torch_output = torch_module(torch_input)
     # check outputs
     utilities.check_arrays(torch_output, warp_output, rtol=rtol, atol=atol)
-
-
-def check_forward_rnn_cell(
-    *,
-    warp_module,
-    torch_module,
-    device,
-    dtype,
-    shape,
-    hidden_shape,
-    cell_shape,
-    rtol: float = 1e-02,
-    atol: float = 1e-03,
-):
-    # move modules to target device
-    warp_module.to(device)
-    torch_module.to(device)
-    # init parameters to same values
-    utilities.init_parameters(torch_module.parameters())
-    utilities.init_parameters(warp_module.parameters(as_array=True))
-    # create inputs
-    # - input
-    array = utilities.sample_array(shape, dtype=dtype)
-    torch_input = torch.tensor(array, device=device)
-    warp_input = wp.array(array, device=device)
-    # - hidden state
-    array = utilities.sample_array(hidden_shape, dtype=dtype)
-    torch_hidden = torch.tensor(array, device=device)
-    warp_hidden = wp.array(array, device=device)
-    # - cell state
-    if cell_shape is not None:
-        array = utilities.sample_array(cell_shape, dtype=dtype)
-        torch_cell = torch.tensor(array, device=device)
-        warp_cell = wp.array(array, device=device)
-    # forward pass
-    torch_outputs = []
-    warp_outputs = []
-    for i in range(shape[0]):  # sequence length
-        if cell_shape is None:
-            torch_hidden = torch_module(torch_input[i], torch_hidden)
-            torch_outputs.append(torch_hidden)
-            warp_hidden = wp.clone(warp_module(warp_input[i], warp_hidden))
-            warp_outputs.append(warp_hidden)
-        else:
-            torch_hidden, torch_cell = torch_module(torch_input[i], (torch_hidden, torch_cell))
-            torch_outputs.append((torch_hidden, torch_cell))
-            warp_output = warp_module(warp_input[i], (warp_hidden, warp_cell))
-            warp_hidden, warp_cell = wp.clone(warp_output[0]), wp.clone(warp_output[1])
-            warp_outputs.append((warp_hidden, warp_cell))
-    # check outputs
-    for warp_output, torch_output in zip(warp_outputs, torch_outputs):
-        if cell_shape is None:
-            utilities.check_arrays(torch_output, warp_output, rtol=rtol, atol=atol)
-        else:
-            utilities.check_arrays(torch_output[0], warp_output[0], rtol=rtol, atol=atol)
-            utilities.check_arrays(torch_output[1], warp_output[1], rtol=rtol, atol=atol)
 
 
 def check_gradients(
@@ -181,6 +160,58 @@ def check_gradients(
     )
 
 
+def check_forward_rnn(
+    *,
+    warp_module,
+    torch_module,
+    device,
+    shape,
+    hidden_shapes: list | None,
+    rtol: float = 1e-02,
+    atol: float = 1e-03,
+):
+    # check the outputs of a recurrent module (cell or multi-layer) against PyTorch (see _run_rnn for the arguments)
+    (_, _, torch_outputs), (_, _, warp_outputs), _ = _run_rnn(
+        warp_module=warp_module, torch_module=torch_module, device=device, shape=shape, hidden_shapes=hidden_shapes
+    )
+    utilities.check_arrays(torch_outputs, warp_outputs, rtol=rtol, atol=atol)
+
+
+def check_gradients_rnn(
+    *,
+    warp_module,
+    torch_module,
+    device,
+    shape,
+    hidden_shapes: list | None,
+    rtol: float = 1e-02,
+    atol: float = 1e-02,
+):
+    # check the gradients (of the input, initial states and parameters) of a recurrent module (cell or multi-layer)
+    # against PyTorch (see _run_rnn for the arguments), where the loss is a weighted sum of all the outputs
+    (torch_input, torch_hidden, torch_outputs), (warp_input, warp_hidden, warp_outputs), tape = _run_rnn(
+        warp_module=warp_module, torch_module=torch_module, device=device, shape=shape, hidden_shapes=hidden_shapes
+    )
+    # backward pass
+    weights = [utilities.sample_array(tuple(output.shape)) for output in torch_outputs]
+    sum((output * torch.tensor(w, device=device)).sum() for output, w in zip(torch_outputs, weights)).backward()
+    tape.backward(grads={output: wp.array(w, device=device) for output, w in zip(warp_outputs, weights)})
+    # check gradients (whose magnitude grows with the sizes and number of layers, so the absolute tolerance is
+    # scaled by the magnitude of the reference gradients). Backpropagating through saturated gates over several
+    # time steps and layers is ill-conditioned in single precision (even PyTorch deviates from a double precision
+    # reference by ~1e-2 in some cases), hence the looser tolerance
+    torch_grads = [torch_input.grad]
+    warp_grads = [warp_input.grad]
+    if hidden_shapes is not None:
+        torch_grads += [array.grad for array in _flatten(torch_hidden)]
+        warp_grads += [array.grad for array in _flatten(warp_hidden)]
+    torch_grads += [parameter.grad for parameter in torch_module.parameters()]
+    warp_grads += [parameter.grad for parameter in warp_module.parameters(as_array=True)]
+    for torch_grad, warp_grad in zip(torch_grads, warp_grads, strict=True):
+        scale = max(1.0, torch_grad.abs().max().item())
+        utilities.check_arrays(torch_grad, warp_grad, flatten=True, rtol=rtol, atol=atol * scale)
+
+
 def check_requires_grad(*, warp_module, device, inputs, requires_grad: bool):
     # move module to target device
     warp_module.to(device)
@@ -192,7 +223,7 @@ def check_requires_grad(*, warp_module, device, inputs, requires_grad: bool):
     for parameter in warp_module.parameters(as_array=False):
         assert parameter.requires_grad == requires_grad
         assert (parameter.data.grad is not None) == requires_grad
-    for warp_output in warp_outputs if isinstance(warp_outputs, tuple) else (warp_outputs,):
+    for warp_output in _flatten(warp_outputs):
         assert warp_output.requires_grad == requires_grad
         assert (warp_output.grad is not None) == requires_grad
 

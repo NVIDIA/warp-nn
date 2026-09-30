@@ -27,6 +27,10 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
 
     @wp.func
     def sigmoid(x: float):
+        # keep the exponent non-positive, since an overflowing exp() yields NaN gradients
+        if x < 0.0:
+            e = wp.exp(x)
+            return e / (1.0 + e)
         return 1.0 / (1.0 + wp.exp(-x))
 
     @wp.func

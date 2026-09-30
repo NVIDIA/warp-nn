@@ -70,3 +70,11 @@ def test_gradients(capsys, device, dtype, ndim):
             dtype=dtype,
             shape=(10, 11, 12, 13)[:ndim],
         )
+
+
+def test_invalid_input(capsys):
+    # the start dimension comes after the end dimension (once resolved for the number of dimensions of the input)
+    with pytest.raises(IndexError, match="cannot come after"):
+        nn.Flatten(start_dim=2, end_dim=1)(wp.zeros((2, 3, 4), dtype=wp.float32, device="cpu"))
+    with pytest.raises(IndexError, match="cannot come after"):
+        nn.Flatten(start_dim=-1, end_dim=0)(wp.zeros((2, 3, 4), dtype=wp.float32, device="cpu"))

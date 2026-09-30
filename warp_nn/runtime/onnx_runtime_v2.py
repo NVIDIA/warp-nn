@@ -201,7 +201,7 @@ class OnnxRuntimeV2:
         """Execute an ONNX graph using Warp-NN modules.
 
         Each graph node is compiled into Warp-NN modules (e.g. ``Gemm`` into :py:class:`~warp_nn.nn.Linear`,
-        ``LSTM`` into :py:class:`~warp_nn.nn.LSTMCell`), with its constant inputs (initializers and ``Constant``
+        ``LSTM`` into :py:class:`~warp_nn.nn.LSTM`), with its constant inputs (initializers and ``Constant``
         nodes) loaded into the modules' parameters and buffers.
 
         Symbolic ONNX dimensions are resolved from the actual input arrays. The first call with a given set of

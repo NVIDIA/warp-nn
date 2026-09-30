@@ -32,8 +32,10 @@ _SHAPES = [((7, 16), 16), ((3, 5, 16), (16,)), ((4, 5, 6), (5, 6)), ((2, 3, 4, 5
 _AFFINE = [(True, True), (True, False), (False, False)]
 
 
+# module-specific parameters
 @pytest.mark.parametrize("elementwise_affine, bias", _AFFINE)
 @pytest.mark.parametrize("shape, normalized_shape", _SHAPES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_forward(capsys, device, dtype, shape, normalized_shape, elementwise_affine, bias):
@@ -49,8 +51,10 @@ def test_forward(capsys, device, dtype, shape, normalized_shape, elementwise_aff
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("elementwise_affine, bias", _AFFINE)
 @pytest.mark.parametrize("shape, normalized_shape", _SHAPES)
+# test-specific parameters
 @pytest.mark.parametrize("dtype", [wp.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_gradients(capsys, device, dtype, shape, normalized_shape, elementwise_affine, bias):
@@ -67,7 +71,9 @@ def test_gradients(capsys, device, dtype, shape, normalized_shape, elementwise_a
     )
 
 
+# module-specific parameters
 @pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_requires_grad(capsys, device, requires_grad):
     if not utilities.is_device_available(device):

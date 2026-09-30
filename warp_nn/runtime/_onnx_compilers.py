@@ -27,6 +27,7 @@ import numpy as np
 import warp as wp
 
 from warp_nn import nn
+from warp_nn.runtime._onnx_kernels import batch_first_to_onnx_sequence, sequence_first_to_batch_first
 
 
 if TYPE_CHECKING:
@@ -278,33 +279,40 @@ class _ElementwiseOperation(_Operation):
 
 @dataclass(eq=False, kw_only=True)
 class _RecurrentOperation(_Operation):
-    """Unroll recurrent cells (one per direction) over the sequence of an ONNX ``RNN``, ``GRU`` or ``LSTM`` node.
+    """Execute an ONNX ``RNN``, ``GRU`` or ``LSTM`` node with a single-layer recurrent module.
 
-    The final states (``Y_h`` and, for LSTM, ``Y_c``) are updated in place at each step, and the hidden states
-    are gathered into the output sequence ``Y`` (only if it is used).
+    The module processes batch-first sequences, so the input is converted from the ONNX layout
+    ``(seq_length, batch_size, input_size)`` and the output sequence ``Y`` (only if it is used) is converted to
+    ``(seq_length, num_directions, batch_size, hidden_size)``, by differentiable kernels. The reverse direction
+    (without the forward one) is executed by the forward module, reversing the time steps of the input and output.
+    The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned by the module.
     """
 
     node: _Node
-    cells: tuple[nn.Module, ...]
-    reverse: tuple[bool, ...]  # whether each direction (cell) processes the sequence in reverse order
+    module: nn.Module
+    flip: bool  # whether the sequence is processed in reverse order by a unidirectional module
     input: str
     initial_states: tuple[str | None, ...]  # initial_h (and initial_c, for LSTM)
-    _cache: dict[tuple[int, int], tuple[wp.array | None, ...]] = field(default_factory=dict, init=False, repr=False)
+    _cache: dict[tuple[int, int], tuple[wp.array, wp.array | None, tuple[wp.array, ...]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     @property
     def modules(self) -> tuple[nn.Module, ...]:
-        return self.cells
+        return (self.module,)
 
     def __call__(self, tensors: dict[str, wp.array]) -> None:
+        module = self.module
         input = tensors[self.input]
-        input_size, hidden_size = self.cells[0].input_size, self.cells[0].hidden_size
+        input_size, hidden_size = module.input_size, module.hidden_size
         if input.ndim != 3 or input.shape[2] != input_size:
             raise ValueError(
                 f"OnnxRuntimeV2 {self.node.op_type}: expected an input with shape "
                 f"(seq_length, batch_size, {input_size}), got {tuple(input.shape)}"
             )
         seq_length, batch_size = input.shape[:2]
-        state_shape = (len(self.cells), batch_size, hidden_size)
+        num_directions = 2 if module.bidirectional else 1
+        state_shape = (num_directions, batch_size, hidden_size)
         initial_states = tuple(None if name is None else tensors[name] for name in self.initial_states)
         for name, initial_state in zip(self.initial_states, initial_states):
             if initial_state is not None and tuple(initial_state.shape) != state_shape:
@@ -312,39 +320,44 @@ class _RecurrentOperation(_Operation):
                     f"OnnxRuntimeV2 {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
                     f"got {tuple(initial_state.shape)}"
                 )
-        # cache output sequence (only if used) and final states
+        # cache the batch-first input, output sequence (only if used) and default (zero) initial states
         key = (seq_length, batch_size)
         if key not in self._cache:
-            arguments = {
-                "dtype": wp.float32,
-                "device": self.cells[0].device,
-                "requires_grad": self.cells[0].requires_grad,
-            }
+            arguments = {"dtype": wp.float32, "device": module.device}
+            grad = {"requires_grad": module.requires_grad}
+            batch_first = wp.empty((batch_size, seq_length, input_size), **arguments, **grad)
             sequence = None
             if self.node.outputs[0]:
-                sequence = wp.empty((seq_length, len(self.cells), batch_size, hidden_size), **arguments)
-            states = tuple(wp.empty(state_shape, **arguments) for _ in self.initial_states)
-            self._cache[key] = (sequence, *states)
-        sequence, *states = self._cache[key]
-        # unroll the cells, copying their (cached) outputs, since they cannot be read and written in the same step
-        for d, (cell, reverse) in enumerate(zip(self.cells, self.reverse)):
-            state = tuple(array[d] for array in states)
-            for array, initial_state in zip(state, initial_states):
-                if initial_state is None:
-                    array.zero_()
-                else:
-                    wp.copy(array, initial_state[d])
-            for t in reversed(range(seq_length)) if reverse else range(seq_length):
-                next_state = cell(input[t], state if len(state) > 1 else state[0])
-                if not isinstance(next_state, tuple):
-                    next_state = (next_state,)
-                for array, next_array in zip(state, next_state):
-                    wp.copy(array, next_array)
-                if sequence is not None:
-                    wp.copy(sequence[t, d], next_state[0])
-        for name, output in zip(self.node.outputs, (sequence, *states)):
+                sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
+            zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
+            self._cache[key] = (batch_first, sequence, zeros)
+        batch_first, sequence, zeros = self._cache[key]
+        reverse = int(self.flip)
+        wp.launch(
+            sequence_first_to_batch_first,
+            dim=tuple(input.shape),
+            inputs=[input, reverse],
+            outputs=[batch_first],
+            device=module.device,
+        )
+        hidden = None
+        if any(state is not None for state in initial_states):
+            hidden = tuple(zero if state is None else state for state, zero in zip(initial_states, zeros))
+            hidden = hidden if len(hidden) > 1 else hidden[0]
+        output, final_states = module(batch_first, hidden)
+        if not isinstance(final_states, tuple):
+            final_states = (final_states,)
+        if sequence is not None:
+            wp.launch(
+                batch_first_to_onnx_sequence,
+                dim=tuple(sequence.shape),
+                inputs=[output, reverse],
+                outputs=[sequence],
+                device=module.device,
+            )
+        for name, array in zip(self.node.outputs, (sequence, *final_states)):
             if name:
-                tensors[name] = output
+                tensors[name] = array
 
 
 # Compiler factories
@@ -627,20 +640,20 @@ def _compile_group_norm(node: _Node, context: CompilationContext) -> _Operation:
 
 # ONNX gate order and default activations, and the gate indices in PyTorch (and Warp-NN) order
 _RECURRENT_LAYERS: dict[str, tuple[type[nn.Module], tuple[str, ...], tuple[int, ...]]] = {
-    "RNN": (nn.RNNCell, ("tanh",), (0,)),  # (h)
-    "GRU": (nn.GRUCell, ("sigmoid", "tanh"), (1, 0, 2)),  # (z, r, h) -> (r, z, n)
-    "LSTM": (nn.LSTMCell, ("sigmoid", "tanh", "tanh"), (0, 2, 3, 1)),  # (i, o, f, c) -> (i, f, g, o)
+    "RNN": (nn.RNN, ("tanh",), (0,)),  # (h)
+    "GRU": (nn.GRU, ("sigmoid", "tanh"), (1, 0, 2)),  # (z, r, h) -> (r, z, n)
+    "LSTM": (nn.LSTM, ("sigmoid", "tanh", "tanh"), (0, 2, 3, 1)),  # (i, o, f, c) -> (i, f, g, o)
 }
 _DIRECTIONS = {"forward": (False,), "reverse": (True,), "bidirectional": (False, True)}
 
 
 def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
-    """Compile an ONNX ``RNN``/``GRU``/``LSTM`` node into :class:`RNNCell`/:class:`GRUCell`/:class:`LSTMCell` modules.
+    """Compile an ONNX ``RNN``/``GRU``/``LSTM`` node into a single-layer :class:`RNN`/:class:`GRU`/:class:`LSTM` module.
 
     Only the default activations are supported, and the GRU requires ``linear_before_reset = 1`` (as exported by
     PyTorch). The sequence lengths and the LSTM peepholes are not supported.
     """
-    cell_type, activations, gate_order = _RECURRENT_LAYERS[node.op_type]
+    module_type, activations, gate_order = _RECURRENT_LAYERS[node.op_type]
     extra = {"GRU": {"linear_before_reset": 0}, "LSTM": {"input_forget": 0}}.get(node.op_type, {})
     attributes = _attributes(
         node,
@@ -666,8 +679,6 @@ def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
         "input_forget": attributes.get("input_forget"),
         "sequence_lens": context.input_name(node, 4),
         "peepholes (P)": node.op_type == "LSTM" and context.input_name(node, 7),
-        # the steps overwrite the same (cached) arrays, so the recorded gradients would be wrong
-        "gradients (requires_grad)": context.requires_grad,
     }
     if features := [name for name, used in unsupported.items() if used]:
         raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: {', '.join(features)} not supported")
@@ -685,27 +696,31 @@ def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
     def reorder(array: np.ndarray) -> np.ndarray:
         return np.concatenate([array[i * hidden_size : (i + 1) * hidden_size] for i in gate_order])
 
-    cells = []
+    module = module_type(
+        weight_ih.shape[-1],
+        hidden_size,
+        bidirectional=len(reverse) == 2,
+        bias=bias is not None,
+        initialize_parameters=False,
+        requires_grad=context.requires_grad,
+    )
+    state = {}
     for d in range(len(reverse)):
-        cell = cell_type(
-            weight_ih.shape[-1],
-            hidden_size,
-            bias=bias is not None,
-            initialize_parameters=False,
-            requires_grad=context.requires_grad,
-        )
-        state = {"weight_ih": reorder(weight_ih[d]), "weight_hh": reorder(weight_hh[d])}
+        suffix = "_reverse" if d else ""
+        state |= {f"weight_ih_l0{suffix}": reorder(weight_ih[d]), f"weight_hh_l0{suffix}": reorder(weight_hh[d])}
         if bias is not None:
             bias_ih, bias_hh = np.split(bias[d], 2)
-            state |= {"bias_ih": reorder(bias_ih)[:, None], "bias_hh": reorder(bias_hh)[:, None]}
-        _load_state(cell, **state)
-        cells.append(cell)
+            state |= {
+                f"bias_ih_l0{suffix}": reorder(bias_ih)[:, None],
+                f"bias_hh_l0{suffix}": reorder(bias_hh)[:, None],
+            }
+    _load_state(module, **state)
 
     initial_states = (context.tensor(node, 5, required=False),)
     if node.op_type == "LSTM":
         initial_states += (context.tensor(node, 6, required=False),)
     return _RecurrentOperation(
-        node=node, cells=tuple(cells), reverse=reverse, input=context.tensor(node, 0), initial_states=initial_states
+        node=node, module=module, flip=reverse == (True,), input=context.tensor(node, 0), initial_states=initial_states
     )
 
 

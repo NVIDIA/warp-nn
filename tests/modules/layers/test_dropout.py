@@ -30,7 +30,9 @@ def _positive_input(shape, *, dtype=wp.float32, device, requires_grad=False):
     return wp.array(array, dtype=dtype, device=device, requires_grad=requires_grad)
 
 
+# module-specific parameters
 @pytest.mark.parametrize("p", [0.2, 0.5, 0.9])
+# test-specific parameters
 @pytest.mark.parametrize("shape", [(100_000,), (100, 1000), (10, 100, 100), (10, 10, 10, 100)])
 @pytest.mark.parametrize("dtype", [wp.float16, wp.float32, wp.float64])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -63,6 +65,33 @@ def test_gradients(capsys, device):
     tape.backward(grads={output: wp.ones_like(output)})
     np.testing.assert_allclose(input.grad.numpy(), expected, rtol=1e-6)
     assert set(np.unique(input.grad.numpy())) == {0.0, np.float32(1.0 / 0.7)}
+
+
+# module-specific parameters
+@pytest.mark.parametrize("requires_grad", [True, False])
+# test-specific parameters
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_requires_grad(capsys, device, requires_grad):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    check_requires_grad(
+        warp_module=nn.Dropout(0.5, requires_grad=requires_grad),
+        device=device,
+        inputs=[_positive_input((2, 8), device=device, requires_grad=True)],
+        requires_grad=requires_grad,
+    )
+
+
+def test_invalid_arguments(capsys):
+    with pytest.raises(ValueError, match="interval"):
+        nn.Dropout(-0.1)
+    with pytest.raises(ValueError, match="interval"):
+        nn.Dropout(1.5)
+
+
+def test_invalid_input(capsys):
+    with pytest.raises(TypeError, match="int32"):
+        nn.Dropout(0.5).to("cpu")(wp.zeros((2, 2), dtype=wp.int32, device="cpu"))
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -143,25 +172,3 @@ def test_move_to_device(capsys):
         output = dropout.to(device)(_positive_input((100,), device=device))
         assert output.device == wp.get_device(device)
         assert np.any(output.numpy() == 0) and np.any(output.numpy() != 0)
-
-
-@pytest.mark.parametrize("requires_grad", [True, False])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_requires_grad(capsys, device, requires_grad):
-    if not utilities.is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-    check_requires_grad(
-        warp_module=nn.Dropout(0.5, requires_grad=requires_grad),
-        device=device,
-        inputs=[_positive_input((2, 8), device=device, requires_grad=True)],
-        requires_grad=requires_grad,
-    )
-
-
-def test_invalid_arguments(capsys):
-    with pytest.raises(ValueError, match="interval"):
-        nn.Dropout(-0.1)
-    with pytest.raises(ValueError, match="interval"):
-        nn.Dropout(1.5)
-    with pytest.raises(TypeError, match="int32"):
-        nn.Dropout(0.5).to("cpu")(wp.zeros((2, 2), dtype=wp.int32, device="cpu"))
