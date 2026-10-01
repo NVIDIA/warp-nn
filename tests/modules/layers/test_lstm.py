@@ -17,14 +17,12 @@ import hypothesis
 import hypothesis.strategies as st
 import pytest
 
-import contextlib
 import torch
 
 import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
-from warp_nn.utils import kernel_config
 
 from ... import utilities
 from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
@@ -120,12 +118,8 @@ def test_gradients(
         pytest.skip(f"Device '{device}' is not available")
     num_directions = 2 if bidirectional else 1
     kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "bias": bias}
-    # the backward kernel of the LSTM cell requires more shared memory than available on some CUDA devices
-    # with the default (32, 32) tile shape
-    with kernel_config(tile_2d=(16, 16)) if device == "cuda" else contextlib.nullcontext():
-        warp_module = nn.LSTM(input_size, hidden_size, **kwargs)
     check_gradients_rnn(
-        warp_module=warp_module,
+        warp_module=nn.LSTM(input_size, hidden_size, **kwargs),
         torch_module=torch.nn.LSTM(input_size, hidden_size, batch_first=True, **kwargs),
         device=device,
         shape=[batch_size, sequence_length, input_size],

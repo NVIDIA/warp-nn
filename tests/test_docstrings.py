@@ -26,7 +26,7 @@ import numpy as np
 import warp as wp
 
 from tests.utilities import is_device_available
-from warp_nn.runtime import onnx_runtime, onnx_runtime_v2
+from warp_nn.runtime import onnx_runtime
 
 
 wp.init()
@@ -127,7 +127,7 @@ def _generate_onnx_file(path) -> None:
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("module, owner", _doctests(onnx_runtime, onnx_runtime_v2))
+@pytest.mark.parametrize("module, owner", _doctests(onnx_runtime))
 def test_runtime(tmp_path, monkeypatch, device, module, owner):
     _skip_if_unavailable(device)
     _generate_onnx_file(tmp_path / "policy.onnx")

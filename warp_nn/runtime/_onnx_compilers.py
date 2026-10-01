@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compilation of ONNX graph nodes into operations executed by Warp-NN modules (used by ``OnnxRuntimeV2``)."""
+"""Compilation of ONNX graph nodes into operations executed by Warp-NN modules (used by ``OnnxRuntime``)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from warp_nn.runtime._onnx_kernels import batch_first_to_onnx_sequence, sequence
 
 
 if TYPE_CHECKING:
-    from warp_nn.runtime.onnx_runtime_v2 import _Node
+    from warp_nn.runtime.onnx_runtime import _Node
 
 
 _Operand = str | np.ndarray  # name of a runtime array in the tensor table, or constant value
@@ -62,11 +62,11 @@ class CompilationContext:
         name = self.input_name(node, index)
         if not name:
             if required:
-                raise ValueError(f"OnnxRuntimeV2 {node.op_type}: input {index} is required")
+                raise ValueError(f"OnnxRuntime {node.op_type}: input {index} is required")
             return None
         if name not in self.constants:
             raise NotImplementedError(
-                f"OnnxRuntimeV2 {node.op_type}: input '{name}' must be a constant (initializer or Constant node)"
+                f"OnnxRuntime {node.op_type}: input '{name}' must be a constant (initializer or Constant node)"
             )
         return self.constants[name]
 
@@ -75,7 +75,7 @@ class CompilationContext:
         name = self.input_name(node, index)
         if not name:
             if required:
-                raise ValueError(f"OnnxRuntimeV2 {node.op_type}: input {index} is required")
+                raise ValueError(f"OnnxRuntime {node.op_type}: input {index} is required")
             return None
         if name in self.constants:
             self.runtime_constants.add(name)
@@ -85,21 +85,21 @@ class CompilationContext:
         """Get a required element-wise operand: its constant value if known, or its name otherwise."""
         name = self.input_name(node, index)
         if not name:
-            raise ValueError(f"OnnxRuntimeV2 {node.op_type}: input {index} is required")
+            raise ValueError(f"OnnxRuntime {node.op_type}: input {index} is required")
         return self.constants.get(name, name)
 
 
 def _attributes(node: _Node, **defaults: Any) -> dict[str, Any]:
     """Get the node attributes (or their defaults), rejecting any attribute that is not listed."""
     if unsupported := set(node.attributes) - set(defaults):
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: unsupported attributes {sorted(unsupported)}")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: unsupported attributes {sorted(unsupported)}")
     return {name: node.attributes.get(name, default) for name, default in defaults.items()}
 
 
 def _check_outputs(node: _Node, count: int) -> None:
     """Reject the node if any optional output beyond the first ``count`` ones is used."""
     if any(node.outputs[count:]):
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: only the first {count} output(s) are supported")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: only the first {count} output(s) are supported")
 
 
 def _load_state(module: nn.Module, **values: np.ndarray) -> None:
@@ -109,7 +109,7 @@ def _load_state(module: nn.Module, **values: np.ndarray) -> None:
         expected = tuple(state[name].shape)
         if np.shape(value) != expected:
             raise ValueError(
-                f"OnnxRuntimeV2: '{name}' of module '{type(module).__name__}' requires shape {expected}, "
+                f"OnnxRuntime: '{name}' of module '{type(module).__name__}' requires shape {expected}, "
                 f"got {np.shape(value)}"
             )
     module.load_state_dict({name: np.ascontiguousarray(value, dtype=np.float32) for name, value in values.items()})
@@ -118,12 +118,12 @@ def _load_state(module: nn.Module, **values: np.ndarray) -> None:
 def _padding(node: _Node, auto_pad: str, pads: tuple[int, ...] | None, spatial_dims: int) -> tuple[int, ...]:
     """Convert ONNX (begin..., end...) pads to the symmetric padding supported by the modules."""
     if auto_pad not in ("NOTSET", "VALID"):
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: auto_pad '{auto_pad}' is not supported")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: auto_pad '{auto_pad}' is not supported")
     if auto_pad == "VALID" or pads is None:
         return (0,) * spatial_dims
     begin, end = tuple(pads[:spatial_dims]), tuple(pads[spatial_dims:])
     if begin != end:
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: only symmetric pads are supported, got {pads}")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: only symmetric pads are supported, got {pads}")
     return begin
 
 
@@ -131,7 +131,7 @@ def _spatial_dims(node: _Node, kernel_shape: tuple[int, ...]) -> int:
     """Get the number of spatial dimensions of a convolution/pooling node, which must be 1 or 2."""
     if len(kernel_shape) not in (1, 2):
         raise NotImplementedError(
-            f"OnnxRuntimeV2 {node.op_type}: only 1D and 2D kernels are supported, got kernel shape {kernel_shape}"
+            f"OnnxRuntime {node.op_type}: only 1D and 2D kernels are supported, got kernel shape {kernel_shape}"
         )
     return len(kernel_shape)
 
@@ -232,16 +232,14 @@ class _ElementwiseOperation(_Operation):
         if len(dtypes) > 1:
             names = ", ".join(sorted(dtype.__name__ for dtype in dtypes))
             raise NotImplementedError(
-                f"OnnxRuntimeV2 {self.node.op_type}: runtime operands with different dtypes ({names}) are not supported"
+                f"OnnxRuntime {self.node.op_type}: runtime operands with different dtypes ({names}) are not supported"
             )
         (dtype,) = dtypes
         shapes = tuple(tuple(value.shape) for value in values)
         try:
             shape = tuple(np.broadcast_shapes(*shapes))
         except ValueError as exc:
-            raise ValueError(
-                f"OnnxRuntimeV2 {self.node.op_type}: operand shapes {shapes} are not broadcastable"
-            ) from exc
+            raise ValueError(f"OnnxRuntime {self.node.op_type}: operand shapes {shapes} are not broadcastable") from exc
         arrays = tuple(self._broadcast(index, value, shape, dtype) for index, value in enumerate(values))
         if len(shape) > 3:
             arrays = tuple(array.reshape((math.prod(shape),)) for array in arrays)
@@ -268,7 +266,7 @@ class _ElementwiseOperation(_Operation):
         # the copy from the broadcast view would not accumulate the gradients over the broadcast dimensions
         if self.chain[0].requires_grad:
             raise NotImplementedError(
-                f"OnnxRuntimeV2 {self.node.op_type}: broadcasting runtime operands is not supported with gradients"
+                f"OnnxRuntime {self.node.op_type}: broadcasting runtime operands is not supported with gradients"
             )
         if key not in self._cache:
             self._cache[key] = wp.empty(shape, dtype=dtype, device=self.chain[0].device)
@@ -307,7 +305,7 @@ class _RecurrentOperation(_Operation):
         input_size, hidden_size = module.input_size, module.hidden_size
         if input.ndim != 3 or input.shape[2] != input_size:
             raise ValueError(
-                f"OnnxRuntimeV2 {self.node.op_type}: expected an input with shape "
+                f"OnnxRuntime {self.node.op_type}: expected an input with shape "
                 f"(seq_length, batch_size, {input_size}), got {tuple(input.shape)}"
             )
         seq_length, batch_size = input.shape[:2]
@@ -317,7 +315,7 @@ class _RecurrentOperation(_Operation):
         for name, initial_state in zip(self.initial_states, initial_states):
             if initial_state is not None and tuple(initial_state.shape) != state_shape:
                 raise ValueError(
-                    f"OnnxRuntimeV2 {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
+                    f"OnnxRuntime {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
                     f"got {tuple(initial_state.shape)}"
                 )
         # cache the batch-first input, output sequence (only if used) and default (zero) initial states
@@ -371,9 +369,7 @@ def _elementwise_operation(
     _check_outputs(node, 1)
     operands = tuple(context.operand(node, index) for index in range(arity))
     if all(isinstance(operand, np.ndarray) for operand in operands):
-        raise NotImplementedError(
-            f"OnnxRuntimeV2 {node.op_type}: operators with only constant inputs are not supported"
-        )
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: operators with only constant inputs are not supported")
     return _ElementwiseOperation(node=node, chain=chain, operands=operands)
 
 
@@ -453,7 +449,7 @@ def _compile_pool(node: _Node, context: CompilationContext) -> _Operation:
         module = (nn.MaxPool1D if spatial_dims == 1 else nn.MaxPool2D)(**arguments, dilation=dilation)
     else:
         if any(d != 1 for d in dilation):
-            raise NotImplementedError(f"OnnxRuntimeV2 AveragePool: dilations are not supported, got {dilation}")
+            raise NotImplementedError(f"OnnxRuntime AveragePool: dilations are not supported, got {dilation}")
         count_include_pad = bool(attributes["count_include_pad"])
         module = (nn.AvgPool1D if spatial_dims == 1 else nn.AvgPool2D)(**arguments, count_include_pad=count_include_pad)
     return _ModuleOperation(node=node, module=module, inputs=(context.tensor(node, 0),))
@@ -464,7 +460,7 @@ def _compile_batch_norm(node: _Node, context: CompilationContext) -> _Operation:
     _check_outputs(node, 1)
     attributes = _attributes(node, epsilon=1e-5, momentum=0.9, spatial=1, training_mode=0)
     if attributes["training_mode"] or not attributes["spatial"]:
-        raise NotImplementedError("OnnxRuntimeV2 BatchNormalization: only spatial inference mode is supported")
+        raise NotImplementedError("OnnxRuntime BatchNormalization: only spatial inference mode is supported")
     scale, bias, mean, var = (context.constant(node, index) for index in range(1, 5))
     module = nn.BatchNorm(
         scale.shape[0], eps=attributes["epsilon"], initialize_parameters=False, requires_grad=context.requires_grad
@@ -494,7 +490,7 @@ def _compile_conv(node: _Node, context: CompilationContext) -> _Operation:
     spatial_dims = _spatial_dims(node, weight.shape[2:])
     if attributes["kernel_shape"] is not None and tuple(attributes["kernel_shape"]) != weight.shape[2:]:
         raise ValueError(
-            f"OnnxRuntimeV2 Conv: kernel_shape {attributes['kernel_shape']} does not match weight shape {weight.shape}"
+            f"OnnxRuntime Conv: kernel_shape {attributes['kernel_shape']} does not match weight shape {weight.shape}"
         )
     groups = attributes["group"]
     in_channels = weight.shape[1] * groups
@@ -519,7 +515,7 @@ def _compile_conv(node: _Node, context: CompilationContext) -> _Operation:
     def forward(input: wp.array) -> wp.array:
         if input.ndim != spatial_dims + 2 or input.shape[1] != in_channels:
             raise ValueError(
-                f"OnnxRuntimeV2 Conv: expected an input with shape (batch_size, {in_channels}, *spatial) "
+                f"OnnxRuntime Conv: expected an input with shape (batch_size, {in_channels}, *spatial) "
                 f"with {spatial_dims} spatial dimension(s), got {tuple(input.shape)}"
             )
         return module(input)
@@ -537,7 +533,7 @@ def _compile_dropout(node: _Node, context: CompilationContext) -> _Operation:
         ratio = context.constant(node, 1, required=False)
         training_mode = context.constant(node, 2, required=False)
         if training_mode is not None and training_mode.item():
-            raise NotImplementedError("OnnxRuntimeV2 Dropout: training mode is not supported")
+            raise NotImplementedError("OnnxRuntime Dropout: training mode is not supported")
     p = 0.5 if ratio is None else float(np.asarray(ratio).item())
     return _ModuleOperation(
         node=node, module=nn.Dropout(p, requires_grad=context.requires_grad).eval(), inputs=(context.tensor(node, 0),)
@@ -568,7 +564,7 @@ def _compile_linear(node: _Node, context: CompilationContext) -> _Operation:
     if node.op_type == "Gemm":
         attributes = _attributes(node, alpha=1.0, beta=1.0, transA=0, transB=0)
         if attributes["transA"]:
-            raise NotImplementedError("OnnxRuntimeV2 Gemm: transA is not supported")
+            raise NotImplementedError("OnnxRuntime Gemm: transA is not supported")
         bias = context.constant(node, 2, required=False)
     else:
         attributes = {"alpha": 1.0, "beta": 1.0, "transB": 0}
@@ -576,7 +572,7 @@ def _compile_linear(node: _Node, context: CompilationContext) -> _Operation:
         bias = None
     weight = context.constant(node, 1)
     if weight.ndim != 2:
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: B must be 2D, got shape {weight.shape}")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: B must be 2D, got shape {weight.shape}")
     weight = attributes["alpha"] * (weight if attributes["transB"] else weight.T)
     out_features, in_features = weight.shape
 
@@ -594,14 +590,14 @@ def _compile_linear(node: _Node, context: CompilationContext) -> _Operation:
             bias = np.broadcast_to(bias, (1, out_features)).reshape(out_features, 1)
         except ValueError as exc:
             raise NotImplementedError(
-                f"OnnxRuntimeV2 Gemm: C must be broadcastable to (1, {out_features}), got shape {np.shape(bias)}"
+                f"OnnxRuntime Gemm: C must be broadcastable to (1, {out_features}), got shape {np.shape(bias)}"
             ) from exc
         _load_state(module, weight=weight, bias=attributes["beta"] * bias)
 
     def forward(input: wp.array) -> wp.array:
         shape = tuple(input.shape)
         if shape[-1] != in_features:
-            raise ValueError(f"OnnxRuntimeV2 {node.op_type}: expected {in_features} input features, got shape {shape}")
+            raise ValueError(f"OnnxRuntime {node.op_type}: expected {in_features} input features, got shape {shape}")
         if len(shape) == 2:
             return module(input)
         rows = math.prod(shape[:-1])
@@ -667,7 +663,7 @@ def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
         **extra,
     )
     if attributes["direction"] not in _DIRECTIONS:
-        raise ValueError(f"OnnxRuntimeV2 {node.op_type}: invalid direction '{attributes['direction']}'")
+        raise ValueError(f"OnnxRuntime {node.op_type}: invalid direction '{attributes['direction']}'")
     reverse = _DIRECTIONS[attributes["direction"]]
     unsupported = {
         "activation_alpha/activation_beta": attributes["activation_alpha"] or attributes["activation_beta"],
@@ -681,17 +677,15 @@ def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
         "peepholes (P)": node.op_type == "LSTM" and context.input_name(node, 7),
     }
     if features := [name for name, used in unsupported.items() if used]:
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: {', '.join(features)} not supported")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: {', '.join(features)} not supported")
 
     weight_ih, weight_hh = context.constant(node, 1), context.constant(node, 2)
     bias = context.constant(node, 3, required=False)
     hidden_size = weight_hh.shape[-1]
     if weight_ih.shape[0] != len(reverse):
-        raise ValueError(
-            f"OnnxRuntimeV2 {node.op_type}: W has {weight_ih.shape[0]} directions, expected {len(reverse)}"
-        )
+        raise ValueError(f"OnnxRuntime {node.op_type}: W has {weight_ih.shape[0]} directions, expected {len(reverse)}")
     if attributes["hidden_size"] not in (None, hidden_size):
-        raise ValueError(f"OnnxRuntimeV2 {node.op_type}: hidden_size {attributes['hidden_size']} does not match R")
+        raise ValueError(f"OnnxRuntime {node.op_type}: hidden_size {attributes['hidden_size']} does not match R")
 
     def reorder(array: np.ndarray) -> np.ndarray:
         return np.concatenate([array[i * hidden_size : (i + 1) * hidden_size] for i in gate_order])
@@ -756,7 +750,7 @@ def _compile_trailing_norm(node: _Node, context: CompilationContext) -> _Operati
     attributes = _attributes(node, axis=-1, epsilon=1e-5, stash_type=1)
     scale = context.constant(node, 1)
     if scale.ndim == 0:
-        raise NotImplementedError(f"OnnxRuntimeV2 {node.op_type}: scalar scales are not supported")
+        raise NotImplementedError(f"OnnxRuntime {node.op_type}: scalar scales are not supported")
     normalized_shape = scale.shape
     if node.op_type == "LayerNormalization":
         bias = context.constant(node, 2, required=False)
@@ -781,7 +775,7 @@ def _compile_trailing_norm(node: _Node, context: CompilationContext) -> _Operati
         axis = attributes["axis"] % input.ndim if -input.ndim <= attributes["axis"] < input.ndim else None
         if axis is None or input.ndim - axis != len(normalized_shape):
             raise ValueError(
-                f"OnnxRuntimeV2 {node.op_type}: the scale shape {normalized_shape} must match the input dimensions "
+                f"OnnxRuntime {node.op_type}: the scale shape {normalized_shape} must match the input dimensions "
                 f"from axis {attributes['axis']} onward, got input shape {tuple(input.shape)}"
             )
         return module(input)
@@ -832,15 +826,15 @@ def _compile_squeeze(node: _Node, context: CompilationContext) -> _Operation:
             squeezed = {i for i, size in enumerate(shape) if size == 1}
         else:
             if any(not -len(shape) <= axis < len(shape) for axis in axes):
-                raise ValueError(f"OnnxRuntimeV2 Squeeze: axes {axes} are out of range for input shape {shape}")
+                raise ValueError(f"OnnxRuntime Squeeze: axes {axes} are out of range for input shape {shape}")
             squeezed = {axis % len(shape) for axis in axes}
             if len(squeezed) != len(axes):
-                raise ValueError(f"OnnxRuntimeV2 Squeeze: axes {axes} contain duplicates for input shape {shape}")
+                raise ValueError(f"OnnxRuntime Squeeze: axes {axes} contain duplicates for input shape {shape}")
             if any(shape[axis] != 1 for axis in squeezed):
-                raise ValueError(f"OnnxRuntimeV2 Squeeze: cannot squeeze axes {axes} of input shape {shape}")
+                raise ValueError(f"OnnxRuntime Squeeze: cannot squeeze axes {axes} of input shape {shape}")
         output = tuple(size for i, size in enumerate(shape) if i not in squeezed)
         if not output:
-            raise NotImplementedError(f"OnnxRuntimeV2 Squeeze: scalar (0D) outputs are not supported, got {shape}")
+            raise NotImplementedError(f"OnnxRuntime Squeeze: scalar (0D) outputs are not supported, got {shape}")
         return output
 
     return _ReshapeOperation(node=node, input=context.tensor(node, 0), output_shape=output_shape)

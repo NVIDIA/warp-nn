@@ -156,5 +156,4 @@ Runtime
 .. autosummary::
     :nosignatures:
 
-    OnnxRuntimeV2
     OnnxRuntime

@@ -26,9 +26,9 @@ _context = threading.local()  # thread-local storage to handle nested contexts a
 
 _BLOCK_DIM = 256
 _TILE_1D = (64,)  # 64
-_TILE_2D = (32, 32)  # 1024
-_TILE_3D = (16, 16, 16)  # 4096
-_TILE_4D = (8, 8, 8, 8)  # 4096
+_TILE_2D = (16, 16)  # 256
+_TILE_3D = (8, 8, 8)  # 512
+_TILE_4D = (4, 4, 4, 4)  # 256
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)

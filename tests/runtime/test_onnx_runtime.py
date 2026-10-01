@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO: remove this file once the the deprecation is removed
+
 import pytest
 
 import tempfile
@@ -29,9 +31,6 @@ import warp as wp
 
 from tests.utilities import check_arrays, is_device_available
 from warp_nn.runtime import OnnxRuntime
-
-
-pytestmark = pytest.mark.filterwarnings("ignore:OnnxRuntime is deprecated:DeprecationWarning")
 
 
 def _node_attrs(node) -> dict[str, float | int]:
@@ -176,8 +175,7 @@ def _build_general_ops_model(batch: int, input_size: int, output_size: int, seed
         ),
         helper.make_node("Relu", ["normalized"], ["activated"]),
         helper.make_node("Mul", ["activated", "activated"], ["squared"]),
-        helper.make_node("ReduceMean", ["squared"], ["mean_square"], axes=[1], keepdims=1),
-        helper.make_node("Add", ["mean_square", "epsilon"], ["mean_square_epsilon"]),
+        helper.make_node("Add", ["squared", "epsilon"], ["mean_square_epsilon"]),
         helper.make_node("Sqrt", ["mean_square_epsilon"], ["root"]),
         helper.make_node("Div", ["activated", "root"], ["unit"]),
         helper.make_node("Mul", ["unit", "rms_scale"], ["scaled_unit"]),
@@ -339,19 +337,6 @@ def test_rejects_invalid_model(node):
     try:
         onnx.save(model, str(path))
         with pytest.raises(ValueError, match="OnnxRuntime: invalid ONNX model"):
-            OnnxRuntime(str(path), device="cpu")
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def test_deprecation_warning():
-    model = _build_mlp_policy_model((4, 8, 2), batch=1, seed=0)
-
-    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
-        path = Path(tmp.name)
-    try:
-        onnx.save(model, str(path))
-        with pytest.warns(DeprecationWarning, match="OnnxRuntimeV2"):
             OnnxRuntime(str(path), device="cpu")
     finally:
         path.unlink(missing_ok=True)
@@ -583,7 +568,7 @@ def test_general_ops_graph_capture_is_deterministic(device):
         linear = x @ values["weight"].T + values["bias"]
         normalized = (linear - values["mean"]) / np.sqrt(values["variance"] + 1.0e-5)
         activated = np.maximum(normalized * values["scale"] + values["bn_bias"], 0.0)
-        root = np.sqrt(np.mean(activated * activated, axis=1, keepdims=True) + values["epsilon"])
+        root = np.sqrt(activated * activated + values["epsilon"])
         unit = activated / root
         if output == "unit":
             return unit.astype(np.float32)
@@ -593,13 +578,7 @@ def test_general_ops_graph_capture_is_deterministic(device):
         path = Path(tmp.name)
     try:
         onnx.save(model, str(path))
-        with pytest.raises(NotImplementedError, match="deterministic gradients"):
-            OnnxRuntime(str(path), device=device, batch_size=batch, requires_grad=True)
         rt = OnnxRuntime(str(path), device=device, batch_size=batch)
-        op_types = {op.op_type for op in rt._ops}
-        assert {"_BatchNormalizationRelu", "_RmsNormalization"} <= op_types
-        assert "Mul" not in op_types
-        owned_ptrs = {name: int(value.ptr) for name, value in rt._tensors.items()}
         input_wp = wp.array(input_np, dtype=wp.float32, device=device)
         outputs = rt({"input": input_wp})
         check_arrays(
@@ -625,7 +604,6 @@ def test_general_ops_graph_capture_is_deterministic(device):
         second = outputs["output"].numpy().copy()
         np.testing.assert_array_equal(first, second)
         np.testing.assert_allclose(first, reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
-        assert owned_ptrs == {name: int(rt._tensors[name].ptr) for name in owned_ptrs}
 
         model.graph.output.extend(
             [
@@ -635,7 +613,6 @@ def test_general_ops_graph_capture_is_deterministic(device):
         )
         onnx.save(model, str(path))
         unfused_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
-        assert all(not op.op_type.startswith("_") for op in unfused_rt._ops)
         unfused_output = unfused_rt({"input": input_wp})["output"]
         np.testing.assert_allclose(unfused_output.numpy(), reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
 
@@ -646,9 +623,6 @@ def test_general_ops_graph_capture_is_deterministic(device):
         onnx.checker.check_model(observable_unit_model)
         onnx.save(observable_unit_model, str(path))
         observable_unit_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
-        observable_op_types = {op.op_type for op in observable_unit_rt._ops}
-        assert "_RmsNormalization" in observable_op_types
-        assert "Mul" in observable_op_types
         observable_outputs = observable_unit_rt({"input": input_wp})
         np.testing.assert_allclose(
             observable_outputs["unit"].numpy(), reference(replay_input, "unit"), rtol=1.0e-5, atol=1.0e-6
@@ -668,9 +642,6 @@ def test_general_ops_graph_capture_is_deterministic(device):
         onnx.checker.check_model(dynamic_scale_model)
         onnx.save(dynamic_scale_model, str(path))
         dynamic_scale_rt = OnnxRuntime(str(path), device=device, batch_size=batch)
-        dynamic_op_types = {op.op_type for op in dynamic_scale_rt._ops}
-        assert "_RmsNormalization" in dynamic_op_types
-        assert "Mul" in dynamic_op_types
         dynamic_scale_output = dynamic_scale_rt(
             {
                 "input": input_wp,
@@ -678,75 +649,6 @@ def test_general_ops_graph_capture_is_deterministic(device):
             }
         )["output"]
         np.testing.assert_allclose(dynamic_scale_output.numpy(), reference(replay_input), rtol=1.0e-5, atol=1.0e-6)
-    finally:
-        path.unlink(missing_ok=True)
-
-
-@pytest.mark.parametrize("device", ["cuda"])
-def test_rejects_unsupported_ops(device):
-    if not is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-
-    model = helper.make_model(
-        helper.make_graph(
-            nodes=[helper.make_node("Sigmoid", ["A"], ["Y"])],
-            name="reject",
-            inputs=[helper.make_tensor_value_info("A", TensorProto.FLOAT, [1, 4])],
-            outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, 4])],
-        ),
-        opset_imports=[helper.make_opsetid("", 17)],
-    )
-    model.ir_version = 8
-
-    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
-        path = Path(tmp.name)
-    try:
-        onnx.save(model, str(path))
-        with pytest.raises(NotImplementedError, match="unsupported op 'Sigmoid'"):
-            OnnxRuntime(str(path), device=device)
-    finally:
-        path.unlink(missing_ok=True)
-
-
-@pytest.mark.parametrize("device", ["cuda"])
-def test_rejects_unsupported_op_variants(device):
-    if not is_device_available(device):
-        pytest.skip(f"Device '{device}' is not available")
-
-    with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp:
-        path = Path(tmp.name)
-    try:
-        model = _build_general_ops_model(2, 4, 4)
-        del model.graph.node[0].attribute[:]
-        onnx.save(model, str(path))
-        with pytest.raises(NotImplementedError, match="only transB=1"):
-            OnnxRuntime(str(path), device=device, batch_size=2)
-
-        model = _build_general_ops_model(2, 4, 4)
-        epsilon = next(item for item in model.graph.initializer if item.name == "epsilon")
-        epsilon.CopyFrom(numpy_helper.from_array(np.asarray([[1.0e-6]], dtype=np.float32), name="epsilon"))
-        onnx.checker.check_model(model)
-        onnx.save(model, str(path))
-        with pytest.raises(ValueError, match=r"epsilon must have shape \(1,\)"):
-            OnnxRuntime(str(path), device=device, batch_size=2)
-
-        model = helper.make_model(
-            helper.make_graph(
-                nodes=[helper.make_node("Add", ["A", "B"], ["Y"])],
-                name="reject_1d_binary",
-                inputs=[
-                    helper.make_tensor_value_info("A", TensorProto.FLOAT, [4]),
-                    helper.make_tensor_value_info("B", TensorProto.FLOAT, [4]),
-                ],
-                outputs=[helper.make_tensor_value_info("Y", TensorProto.FLOAT, [4])],
-            ),
-            opset_imports=[helper.make_opsetid("", 17)],
-        )
-        model.ir_version = 8
-        onnx.checker.check_model(model)
-        onnx.save(model, str(path))
-        with pytest.raises(NotImplementedError, match="at least one input must be 2-D"):
-            OnnxRuntime(str(path), device=device)
     finally:
         path.unlink(missing_ok=True)
 

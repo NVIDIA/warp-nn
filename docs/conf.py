@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import inspect
+import logging
 import operator
 import os
 import sys
@@ -203,3 +204,18 @@ if html_theme == "pydata_sphinx_theme":
         "image_dark": "_static/nvidia-logo-horiz-rgb-wht-for-screen.svg",
     }
     html_theme_options["navbar_center"] = ["navbar-nav"]
+
+
+class _IntersphinxUnreachableFilter(logging.Filter):
+    """Downgrade the "inventory unreachable" warning to INFO so a flaky external site doesn't fail the -W build.
+
+    Sphinx emits this warning without a subtype, so it can't be silenced via ``suppress_warnings``.
+    """
+
+    def filter(self, record):
+        if record.levelno == logging.WARNING and "failed to reach any of the inventories" in record.getMessage():
+            record.levelno, record.levelname = logging.INFO, "INFO"
+        return True
+
+
+logging.getLogger("sphinx.sphinx.ext.intersphinx").addFilter(_IntersphinxUnreachableFilter())

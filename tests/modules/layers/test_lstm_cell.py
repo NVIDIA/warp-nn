@@ -17,14 +17,12 @@ import hypothesis
 import hypothesis.strategies as st
 import pytest
 
-import contextlib
 import torch
 
 import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
-from warp_nn.utils import kernel_config
 
 from ... import utilities
 from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
@@ -75,11 +73,8 @@ def test_forward(capsys, device, bias, batch_size, input_size, hidden_size):
 def test_gradients(capsys, device, bias, batch_size, input_size, hidden_size):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    # the backward kernel requires more shared memory than available on some CUDA devices with the default tiles
-    with kernel_config(tile_2d=(16, 16)) if device == "cuda" else contextlib.nullcontext():
-        warp_module = nn.LSTMCell(input_size=input_size, hidden_size=hidden_size, bias=bias)
     check_gradients_rnn(
-        warp_module=warp_module,
+        warp_module=nn.LSTMCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         torch_module=torch.nn.LSTMCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
         device=device,
         shape=[batch_size, input_size],
@@ -128,9 +123,7 @@ def test_saturated_gradients(capsys, device):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     # large inputs saturate the gates (e.g. sigmoid(-1000)), whose gradients must not overflow (NaN)
-    # (the backward kernel requires more shared memory than available on some CUDA devices with the default tiles)
-    with kernel_config(tile_2d=(16, 16)):
-        module = nn.LSTMCell(input_size=8, hidden_size=4).to(device)
+    module = nn.LSTMCell(input_size=8, hidden_size=4).to(device)
     input = wp.array(1000.0 * utilities.sample_array([2, 8]), device=device, requires_grad=True)
     hidden = (
         wp.array(utilities.sample_array([2, 4]), device=device, requires_grad=True),

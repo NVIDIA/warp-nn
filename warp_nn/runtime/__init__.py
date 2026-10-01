@@ -13,8 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from warp_nn.runtime.onnx_runtime import OnnxRuntime
-from warp_nn.runtime.onnx_runtime_v2 import OnnxRuntimeV2, OnnxTensorSpec
+from warp_nn.runtime.onnx_runtime import OnnxRuntime, OnnxTensorSpec
 
 
-__all__ = ["OnnxRuntime", "OnnxRuntimeV2", "OnnxTensorSpec"]
+__all__ = ["OnnxRuntime", "OnnxTensorSpec"]

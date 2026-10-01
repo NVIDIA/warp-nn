@@ -14,11 +14,15 @@
   to control whether those arrays require gradients
 - Add the `initialize_parameters` constructor argument to layers that own parameters,
   to control whether those parameters are initialized with their default/initial values
-- Add `OnnxRuntimeV2` ONNX inference runtime and mark `OnnxRuntime` as deprecated
 - Add `copy()` utility to copy (possibly non-contiguous) arrays with gradient propagation
 
 ### Changed
 - Update the minimum required Warp version to 1.15.0
+- Update default kernel configuration for tile dimensions
+- Update `OnnxRuntime` ONNX inference runtime to use the implemented modules as ONNX operators.
+  Mark the `batch_size` and `input_batch_axes` constructor arguments as deprecated in favor of `OnnxRuntime.prepare()`
+  method, and the `input_names`, `output_names` and `_shapes` attributes as deprecated in favor of `OnnxRuntime.inputs`
+  and `OnnxRuntime.outputs` properties
 
 ### Fixed
 - Fix crash when calling a module after moving it to another device (the cached arrays were not reallocated)

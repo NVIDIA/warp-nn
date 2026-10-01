@@ -29,8 +29,7 @@ import warp as wp
 from tests.utilities import is_device_available
 from warp_nn import nn
 from warp_nn.modules import activations, layers, operators
-from warp_nn.runtime import OnnxRuntimeV2, OnnxTensorSpec
-from warp_nn.utils import kernel_config
+from warp_nn.runtime import OnnxRuntime, OnnxTensorSpec
 
 
 _OPSET = 24
@@ -70,10 +69,10 @@ def _make_model(nodes, inputs, outputs, constants=None, opset=_OPSET, output_sha
     return make(output_shapes)
 
 
-def _load(tmp_path, model, device, **kwargs) -> OnnxRuntimeV2:
+def _load(tmp_path, model, device, **kwargs) -> OnnxRuntime:
     path = tmp_path / "model.onnx"
     onnx.save(model, path)
-    return OnnxRuntimeV2(str(path), device=device, **kwargs)
+    return OnnxRuntime(str(path), device=device, **kwargs)
 
 
 def _skip_if_unavailable(device, opset=_OPSET):
@@ -631,9 +630,7 @@ def test_recurrent_gradients(tmp_path, device, op_type, direction, variant):
         **attributes,
     )
     model = _make_model([node], inputs, {name: np.float32 for name in node.output}, constants)
-    # smaller tiles, since the LSTM backward pass of the default ones requires more shared memory than available
-    with kernel_config(tile_2d=(16, 16)):
-        runtime = _load(tmp_path, model, device, requires_grad=True)
+    runtime = _load(tmp_path, model, device, requires_grad=True)
 
     arrays = {name: wp.array(value, device=device, requires_grad=True) for name, value in inputs.items()}
     tape = wp.Tape()
@@ -774,6 +771,66 @@ def test_inputs_and_outputs(tmp_path):
         runtime.outputs = ()
     with pytest.raises(FrozenInstanceError):
         runtime.inputs[0].shape = (1, 6)
+
+
+def test_deprecated_api(tmp_path):
+    runtime = _load(tmp_path, _mlp_model(), "cpu")
+    # input/output names
+    with pytest.warns(DeprecationWarning, match="input_names"):
+        assert runtime.input_names == ["obs"]
+    with pytest.warns(DeprecationWarning, match="output_names"):
+        assert runtime.output_names == ["actions"]
+    # declared shapes (with symbolic dimensions set to 1) before preparing the runtime
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes == {"obs": (1, 6), "actions": (1, 3)}
+    # actual shapes of the last prepared inputs/outputs
+    runtime.prepare(batch_size=4)
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes == {"obs": (4, 6), "actions": (4, 3)}
+    runtime.prepare({"obs": wp.zeros((2, 6), dtype=wp.float32, device="cpu")})
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        shapes = runtime._shapes
+    assert shapes == {"obs": (2, 6), "actions": (2, 3)}
+    shapes["actions"] = (1, 1)  # the returned dictionary is a copy
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes["actions"] == (2, 3)
+    # deprecated constructor arguments
+    with pytest.warns(DeprecationWarning):
+        runtime = _load(tmp_path, _mlp_model(), "cpu", batch_size=3, input_batch_axes=0)
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes["actions"] == (3, 3)
+    # deprecated batch axes overriding fixed (exported) dimensions
+    x, h, c = _uniform((1, 1, 2)), _uniform((1, 1, 4)), _uniform((1, 1, 4))
+    node = helper.make_node("LSTM", ["x", "W", "R", "B", "", "h", "c"], ["", "y_h", "y_c"], hidden_size=4)
+    model = _make_model([node], {"x": x, "h": h, "c": c}, {"y_h": np.float32, "y_c": np.float32},
+                        _recurrent_constants(4, 1, 2, 4))  # fmt: skip
+    with pytest.warns(DeprecationWarning):
+        runtime = _load(tmp_path, model, "cpu", batch_size=5, input_batch_axes={"x": 1, "h": -2, "c": 1})
+    assert [spec.shape for spec in runtime.inputs] == [(1, None, 2), (1, None, 4), (1, None, 4)]
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes == {"x": (1, 5, 2), "h": (1, 5, 4), "c": (1, 5, 4), "y_h": (1, 5, 4), "y_c": (1, 5, 4)}
+    inputs = {name: np.repeat(value, 5, axis=1) for name, value in {"x": x, "h": h, "c": c}.items()}
+    outputs = runtime({name: wp.array(value, device="cpu") for name, value in inputs.items()})
+    expected = ReferenceEvaluator(model).run(None, inputs)
+    for name, value in zip(("y_h", "y_c"), expected):
+        np.testing.assert_allclose(outputs[name].numpy(), value, rtol=1e-5, atol=1e-6)
+    outputs = runtime(
+        {name: wp.array(np.repeat(value, 2, axis=1), device="cpu") for name, value in {"x": x, "h": h, "c": c}.items()}
+    )
+    assert outputs["y_h"].shape == (1, 2, 4)  # the relaxed batch axes accept any size
+    with pytest.warns(DeprecationWarning):
+        runtime = _load(tmp_path, model, "cpu", input_batch_axes={"x": 1, "h": None})  # batch size of 1
+    assert [spec.shape for spec in runtime.inputs] == [(1, None, 2), (1, 1, 4), (1, 1, 4)]
+    with pytest.warns(DeprecationWarning, match="_shapes"):
+        assert runtime._shapes["y_h"] == (1, 1, 4)
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="must be positive"):
+        _load(tmp_path, model, "cpu", batch_size=0)
+    with pytest.warns(DeprecationWarning), pytest.raises(KeyError, match="unknown graph inputs"):
+        _load(tmp_path, model, "cpu", input_batch_axes={"y": 1})
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="out of range"):
+        _load(tmp_path, model, "cpu", input_batch_axes=3)
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="out of range"):
+        _load(tmp_path, model, "cpu", input_batch_axes=-4)
 
 
 def test_validates_inputs(tmp_path):
