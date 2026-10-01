@@ -38,11 +38,11 @@ def _disable_cudnn_tf32():
 
 
 @hypothesis.given(
-    batch_size=st.integers(min_value=1, max_value=100),
-    in_channels=st.sampled_from(list(range(30, 100, 3))),
-    out_channels=st.sampled_from(list(range(30, 100, 3))),
-    in_height=st.integers(min_value=10, max_value=100),
-    in_width=st.integers(min_value=10, max_value=100),
+    batch_size=st.integers(min_value=1, max_value=8),
+    in_channels=st.sampled_from(list(range(3, 25, 3))),
+    out_channels=st.sampled_from(list(range(3, 25, 3))),
+    in_height=st.integers(min_value=8, max_value=32),  # >= 1 + dilation * (kernel_size - 1)
+    in_width=st.integers(min_value=8, max_value=32),  # >= 1 + dilation * (kernel_size - 1)
 )
 @hypothesis.settings(
     suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
@@ -78,13 +78,6 @@ def test_forward(
 ):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    # reduce sizes for faster tests on CPU
-    if device == "cpu":
-        batch_size = min(batch_size, 10)
-        in_channels = min(in_channels - 15, 48)  # must be divisible by groups
-        out_channels = min(out_channels - 15, 48)  # must be divisible by groups
-        in_height = min(in_height, 50)
-        in_width = min(in_width, 50)
     check_forward(
         warp_module=nn.Conv2D(
             in_channels=in_channels,
@@ -113,11 +106,11 @@ def test_forward(
 
 
 @hypothesis.given(
-    batch_size=st.integers(min_value=1, max_value=100),
-    in_channels=st.sampled_from(list(range(30, 100, 3))),
-    out_channels=st.sampled_from(list(range(30, 100, 3))),
-    in_height=st.integers(min_value=10, max_value=100),
-    in_width=st.integers(min_value=10, max_value=100),
+    batch_size=st.integers(min_value=1, max_value=8),
+    in_channels=st.sampled_from(list(range(3, 25, 3))),
+    out_channels=st.sampled_from(list(range(3, 25, 3))),
+    in_height=st.integers(min_value=8, max_value=32),  # >= 1 + dilation * (kernel_size - 1)
+    in_width=st.integers(min_value=8, max_value=32),  # >= 1 + dilation * (kernel_size - 1)
 )
 @hypothesis.settings(
     suppress_health_check=[hypothesis.HealthCheck.function_scoped_fixture],
@@ -153,13 +146,6 @@ def test_gradients(
 ):
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    # reduce sizes for faster tests on CPU
-    if device == "cpu":
-        batch_size = min(batch_size, 10)
-        in_channels = min(in_channels - 15, 48)  # must be divisible by groups
-        out_channels = min(out_channels - 15, 48)  # must be divisible by groups
-        in_height = min(in_height, 50)
-        in_width = min(in_width, 50)
     check_gradients(
         warp_module=nn.Conv2D(
             in_channels=in_channels,
@@ -224,3 +210,19 @@ def test_invalid_arguments(capsys):
         nn.Conv2D(in_channels=4, out_channels=6, kernel_size=3, groups=3)
     with pytest.raises(ValueError, match="out_channels"):
         nn.Conv2D(in_channels=6, out_channels=4, kernel_size=3, groups=3)
+
+
+# a single large configuration (CUDA only) to cover grid sizes and accumulation lengths of realistic workloads
+@pytest.mark.parametrize("check", [check_forward, check_gradients], ids=["forward", "gradients"])
+def test_large_shape(capsys, check):
+    if not utilities.is_device_available("cuda"):
+        pytest.skip("Device 'cuda' is not available")
+    kwargs = {"in_channels": 48, "out_channels": 60, "kernel_size": 3, "stride": 2, "padding": 1, "groups": 3}
+    check(
+        warp_module=nn.Conv2D(**kwargs),
+        torch_module=torch.nn.Conv2d(**kwargs),
+        device="cuda",
+        dtype=wp.float32,
+        shape=[16, kwargs["in_channels"], 64, 64],
+        **({"atol": 1e-01, "rtol": 1e-02, "weighted": True} if check is check_gradients else {}),
+    )
