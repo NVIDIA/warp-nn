@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-10-01
 ### Added
 - Add `Abs`, `Acos`, `Acosh`, `Add`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AvgPool1D`, `AvgPool2D`, `BatchNorm`,
   `BitwiseAnd`, `BitwiseNot`, `BitwiseOr`, `BitwiseXor`, `Ceil`, `CELU`, `Clip`, `Cos`, `Cosh`, `Div`, `Dropout`,

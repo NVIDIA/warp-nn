@@ -44,10 +44,8 @@ Issues = "https://github.com/NVIDIA/warp-nn/issues"
 Changelog = "https://github.com/NVIDIA/warp-nn/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-# Optional: ONNX policy inference.  Only the pure protobuf parser is needed;
-# inference runs on Warp kernels, no `onnxruntime` is pulled in.
 onnx = [
-  "onnx>=1.16.0",
+  "onnx>=1.16.0",  # no `onnxruntime`, just protobuf parser. Inference runs on Warp kernels
 ]
 tests = [
   "hypothesis",
