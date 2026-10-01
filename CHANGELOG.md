@@ -24,6 +24,10 @@
   method, and the `input_names`, `output_names` and `_shapes` attributes as deprecated in favor of `OnnxRuntime.inputs`
   and `OnnxRuntime.outputs` properties
 
+### Changed (breaking changes)
+- Rename `SoftPlus` and `SoftSign` activations to `Softplus` and `Softsign` respectively
+- Move `Tanh` activation definition to operators
+
 ### Fixed
 - Fix crash when calling a module after moving it to another device (the cached arrays were not reallocated)
 - Fix optimizers' CUDA graph capture and kernel-sharing bugs: first `step()`/`clip_by_total_norm()` call,
