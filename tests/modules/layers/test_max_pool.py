@@ -150,9 +150,10 @@ def test_gradient_routing(capsys, device):
     tape = wp.Tape()
     with tape:
         output = nn.MaxPool1D(2).to(device)(input)
-    tape.backward(grads={output: wp.ones_like(output)})
+    # distinct upstream gradients per window, so that each one must reach the selected element of its own window
+    tape.backward(grads={output: wp.array([[[1.0, 2.0, 3.0, 4.0, 5.0]]], dtype=wp.float32, device=device)})
     np.testing.assert_array_equal(output.numpy(), [[[1.0, 2.0, np.nan, np.nan, -np.inf]]])
-    np.testing.assert_array_equal(input.grad.numpy(), [[[1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0]]])
+    np.testing.assert_array_equal(input.grad.numpy(), [[[1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 0.0, 4.0, 5.0, 0.0]]])
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

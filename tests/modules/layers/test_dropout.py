@@ -61,10 +61,12 @@ def test_gradients(capsys, device):
     with tape:
         output = dropout(input)
     # the seed has already changed, so the backward pass must use the stored mask of the forward pass
-    expected = output.numpy() / input.numpy()
-    tape.backward(grads={output: wp.ones_like(output)})
-    np.testing.assert_allclose(input.grad.numpy(), expected, rtol=1e-6)
-    assert set(np.unique(input.grad.numpy())) == {0.0, np.float32(1.0 / 0.7)}
+    # (the inputs are positive, so the kept elements are the non-zero outputs)
+    kept = output.numpy() != 0.0
+    assert 0.0 < kept.mean() < 1.0
+    weights = utilities.sample_array(tuple(output.shape))
+    tape.backward(grads={output: wp.array(weights, device=device)})
+    np.testing.assert_allclose(input.grad.numpy(), np.where(kept, weights / 0.7, 0.0), rtol=1e-6)
 
 
 # module-specific parameters

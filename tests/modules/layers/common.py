@@ -13,38 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
-
 import torch
 
 import numpy as np
 import warp as wp
 
 from ... import utilities
-
-
-@wp.kernel
-def _loss_1d(a: wp.array1d[Any], loss: wp.array1d[wp.float32]):
-    i = wp.tid()
-    wp.atomic_add(loss, 0, loss.dtype(a[i]))
-
-
-@wp.kernel
-def _loss_2d(a: wp.array2d[Any], loss: wp.array1d[wp.float32]):
-    i, j = wp.tid()
-    wp.atomic_add(loss, 0, loss.dtype(a[i, j]))
-
-
-@wp.kernel
-def _loss_3d(a: wp.array3d[Any], loss: wp.array1d[wp.float32]):
-    i, j, k = wp.tid()
-    wp.atomic_add(loss, 0, loss.dtype(a[i, j, k]))
-
-
-@wp.kernel
-def _loss_4d(a: wp.array4d[Any], loss: wp.array1d[wp.float32]):
-    i, j, k, l = wp.tid()
-    wp.atomic_add(loss, 0, loss.dtype(a[i, j, k, l]))
 
 
 def _flatten(data) -> list:
@@ -109,10 +83,7 @@ def check_gradients(
     shape,
     rtol: float = 1e-02,
     atol: float = 1e-03,
-    weighted: bool = False,
 ):
-    # weighted: whether the loss is a weighted sum of the outputs (with random weights), rather than their sum,
-    # since the gradient of the sum of the outputs vanishes for some modules (e.g. normalization layers)
     # move modules to target device
     warp_module.to(device)
     torch_module.to(device)
@@ -123,32 +94,13 @@ def check_gradients(
     array = utilities.sample_array(shape, dtype=dtype)
     torch_input = torch.tensor(array, device=device, requires_grad=True)
     warp_input = wp.array(array, device=device, requires_grad=True)
-    # compute loss
-    # - torch
+    # forward pass
     torch_output = torch_module(torch_input)
-    if weighted:
-        weights = utilities.sample_array(tuple(torch_output.shape))
-        torch_loss = (torch_output * torch.tensor(weights, device=device)).sum()
-    else:
-        torch_loss = torch_output.sum()
-    torch_loss.backward()
-    # - warp
     tape = wp.Tape()
-    loss = wp.zeros((1,), dtype=wp.float32, requires_grad=True, device=device)
     with tape:
         warp_output = warp_module(warp_input)
-        if not weighted:
-            wp.launch(
-                {1: _loss_1d, 2: _loss_2d, 3: _loss_3d, 4: _loss_4d}[len(warp_output.shape)],
-                dim=warp_output.shape,
-                inputs=[warp_output],
-                outputs=[loss],
-                device=device,
-            )
-    if weighted:
-        tape.backward(grads={warp_output: wp.array(weights, device=device)})
-    else:
-        tape.backward(loss)
+    # backward pass (with the same random upstream gradients)
+    utilities.backward(tape, [torch_output], [warp_output])
     # check gradients
     utilities.check_arrays(torch_input.grad, warp_input.grad, rtol=rtol, atol=atol)
     utilities.check_arrays(
@@ -188,14 +140,12 @@ def check_gradients_rnn(
     atol: float = 1e-02,
 ):
     # check the gradients (of the input, initial states and parameters) of a recurrent module (cell or multi-layer)
-    # against PyTorch (see _run_rnn for the arguments), where the loss is a weighted sum of all the outputs
+    # against PyTorch (see _run_rnn for the arguments)
     (torch_input, torch_hidden, torch_outputs), (warp_input, warp_hidden, warp_outputs), tape = _run_rnn(
         warp_module=warp_module, torch_module=torch_module, device=device, shape=shape, hidden_shapes=hidden_shapes
     )
-    # backward pass
-    weights = [utilities.sample_array(tuple(output.shape)) for output in torch_outputs]
-    sum((output * torch.tensor(w, device=device)).sum() for output, w in zip(torch_outputs, weights)).backward()
-    tape.backward(grads={output: wp.array(w, device=device) for output, w in zip(warp_outputs, weights)})
+    # backward pass (with the same random upstream gradients)
+    utilities.backward(tape, torch_outputs, warp_outputs)
     # check gradients (whose magnitude grows with the sizes and number of layers, so the absolute tolerance is
     # scaled by the magnitude of the reference gradients). Backpropagating through saturated gates over several
     # time steps and layers is ill-conditioned in single precision (even PyTorch deviates from a double precision

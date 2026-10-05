@@ -66,14 +66,13 @@ def check_gradients(*, module, torch_function, device, ndim, num_inputs=1, domai
     arrays = _sample_inputs(ndim=ndim, dtype=wp.float32, domains=domains)
     torch_inputs = [torch.tensor(array, dtype=torch.float64, requires_grad=True) for array in arrays]
     warp_inputs = [wp.array(array, device=device, requires_grad=True) for array in arrays]
-    # backward pass (with the gradient of the sum of the outputs)
-    # - torch
-    torch_function(*torch_inputs).sum().backward()
-    # - warp
+    # forward pass
+    torch_output = torch_function(*torch_inputs)
     tape = wp.Tape()
     with tape:
         warp_output = module(*warp_inputs)
-    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    # backward pass (with the same random upstream gradients)
+    utilities.backward(tape, [torch_output], [warp_output])
     # check gradients (with respect to all the inputs)
     for torch_input, warp_input in zip(torch_inputs, warp_inputs):
         utilities.check_arrays(torch_input.grad, warp_input.grad)

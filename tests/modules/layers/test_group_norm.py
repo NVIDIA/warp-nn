@@ -67,7 +67,6 @@ def test_gradients(capsys, device, dtype, shape, num_groups, affine):
         device=device,
         dtype=dtype,
         shape=shape,
-        weighted=True,
     )
 
 

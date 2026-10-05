@@ -34,24 +34,6 @@ class TorchLambda(torch.nn.Module):
         return self.function(input)
 
 
-@wp.kernel
-def _loss_1d(a: wp.array1d(dtype=float), loss: wp.array1d(dtype=float)):
-    i = wp.tid()
-    wp.atomic_add(loss, 0, a[i])
-
-
-@wp.kernel
-def _loss_2d(a: wp.array2d(dtype=float), loss: wp.array1d(dtype=float)):
-    i, j = wp.tid()
-    wp.atomic_add(loss, 0, a[i, j])
-
-
-@wp.kernel
-def _loss_3d(a: wp.array3d(dtype=float), loss: wp.array1d(dtype=float)):
-    i, j, k = wp.tid()
-    wp.atomic_add(loss, 0, a[i, j, k])
-
-
 def check_forward(*, warp_activation, torch_activation, device, dtype, ndim, atol: float = 1e-03):
     # move activations to target device
     warp_activation.to(device)
@@ -75,24 +57,13 @@ def check_gradients(*, warp_activation, torch_activation, device, dtype, ndim):
     array = utilities.sample_array(shape=[10] * ndim, dtype=dtype)
     torch_input = torch.tensor(array, device=device, requires_grad=True)
     warp_input = wp.array(array, device=device, requires_grad=True)
-    # compute loss
-    # - torch
+    # forward pass
     torch_output = torch_activation(torch_input)
-    torch_loss = torch_output.sum()
-    torch_loss.backward()
-    # - warp
     tape = wp.Tape()
-    loss = wp.zeros((1,), dtype=wp.float32, requires_grad=True, device=device)
     with tape:
         warp_output = warp_activation(warp_input)
-        wp.launch(
-            {1: _loss_1d, 2: _loss_2d, 3: _loss_3d}[ndim],
-            dim=warp_output.shape,
-            inputs=[warp_output],
-            outputs=[loss],
-            device=device,
-        )
-    tape.backward(loss)
+    # backward pass (with the same random upstream gradients)
+    utilities.backward(tape, [torch_output], [warp_output])
     # check gradients
     utilities.check_arrays(torch_input.grad, warp_input.grad)
 
@@ -118,17 +89,18 @@ def check_extreme_inputs(*, warp_activation, torch_activation, device, atol: flo
     # move activations to target device
     warp_activation.to(device)
     torch_activation.to(device)
-    # forward and backward passes (with the gradient of the sum of the outputs)
+    # forward and backward passes (with distinct upstream gradients per element)
+    weights = np.arange(1, array.size + 1, dtype=np.float32)
     # - torch
     torch_input = torch.tensor(array, device=device, requires_grad=True)
     torch_output = torch_activation(torch_input)
-    torch_output.sum().backward()
+    (torch_output * torch.tensor(weights, device=device)).sum().backward()
     # - warp
     warp_input = wp.array(array, device=device, requires_grad=True)
     tape = wp.Tape()
     with tape:
         warp_output = warp_activation(warp_input)
-    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    tape.backward(grads={warp_output: wp.array(weights, device=device)})
     # check outputs and gradients
     torch_output, torch_grad = torch_output.detach().cpu().numpy(), torch_input.grad.cpu().numpy()
     np.testing.assert_allclose(warp_output.numpy(), torch_output, atol=atol, equal_nan=True)

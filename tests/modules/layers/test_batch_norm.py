@@ -73,7 +73,6 @@ def test_gradients(capsys, device, dtype, shape, affine):
         device=device,
         dtype=dtype,
         shape=shape,
-        weighted=True,
     )
 
 
@@ -151,7 +150,6 @@ def test_running_stats(capsys, device, shape, momentum):
         device=device,
         dtype=wp.float32,
         shape=shape,
-        weighted=True,
     )
     utilities.check_arrays(running_stats, [warp_module.running_mean.data, warp_module.running_var.data], test="equal")
 

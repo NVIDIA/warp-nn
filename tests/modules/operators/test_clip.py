@@ -99,14 +99,15 @@ def test_boundary_gradients(capsys, device):
     # the gradient is zero at the bounds, as in PyTorch
     array = np.array([-1.5, -1.0, 0.0, 2.0, 2.5], dtype=np.float32)
     torch_input = torch.tensor(array, requires_grad=True)
-    torch.clamp(torch_input, -1.0, 2.0).sum().backward()
+    weights = np.arange(1, array.size + 1, dtype=np.float32)  # distinct upstream gradients per element
+    (torch.clamp(torch_input, -1.0, 2.0) * torch.tensor(weights)).sum().backward()
     warp_input = wp.array(array, device=device, requires_grad=True)
     tape = wp.Tape()
     with tape:
         warp_output = nn.Clip(-1.0, 2.0).to(device)(warp_input)
-    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    tape.backward(grads={warp_output: wp.array(weights, device=device)})
     np.testing.assert_array_equal(warp_input.grad.numpy(), torch_input.grad.numpy())
-    np.testing.assert_array_equal(warp_input.grad.numpy(), [0.0, 0.0, 1.0, 0.0, 0.0])
+    np.testing.assert_array_equal(warp_input.grad.numpy(), [0.0, 0.0, 3.0, 0.0, 0.0])
 
 
 def test_numpy_scalar_arguments(capsys):

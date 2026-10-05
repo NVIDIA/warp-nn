@@ -24,3 +24,6 @@ _build/
 .coverage
 coverage.xml
 pytest-report.xml
+
+# Benchmark artifacts
+benchmark-results/

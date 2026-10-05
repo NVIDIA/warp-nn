@@ -581,14 +581,15 @@ def test_gradients(tmp_path, device):
     tape = wp.Tape()
     with tape:
         actions = runtime({"obs": obs})["actions"]
-    tape.backward(grads={actions: wp.ones_like(actions)})
+    upstream = _uniform(tuple(actions.shape), low=-1.0, high=1.0)  # non-uniform upstream gradients
+    tape.backward(grads={actions: wp.array(upstream, device=device)})
 
     weights = {
         init.name: torch.tensor(numpy_helper.to_array(init), requires_grad=True) for init in model.graph.initializer
     }
     obs_torch = torch.tensor(obs_np, requires_grad=True)
     hidden = torch.nn.functional.elu(obs_torch @ weights["w1"].T + weights["b1"])
-    torch.tanh(hidden @ weights["w2"].T + weights["b2"]).sum().backward()
+    (torch.tanh(hidden @ weights["w2"].T + weights["b2"]) * torch.tensor(upstream)).sum().backward()
 
     tolerances = {"rtol": 1.0e-4, "atol": 1.0e-5}
     np.testing.assert_allclose(obs.grad.numpy(), obs_torch.grad.numpy(), **tolerances)
@@ -636,7 +637,10 @@ def test_recurrent_gradients(tmp_path, device, op_type, direction, variant):
     tape = wp.Tape()
     with tape:
         outputs = runtime(arrays)
-    tape.backward(grads={array: wp.ones_like(array) for array in outputs.values()})
+    # non-uniform upstream gradients, with the ONNX layouts: y (seq, directions, batch, hidden) and the final
+    # states (directions, batch, hidden)
+    upstream = {name: _uniform(tuple(array.shape), low=-1.0, high=1.0) for name, array in outputs.items()}
+    tape.backward(grads={array: wp.array(upstream[name], device=device) for name, array in outputs.items()})
 
     # PyTorch reference (a reverse-only ONNX node is a unidirectional module applied to the time-reversed sequence)
     order = _TORCH_GATE_ORDER[op_type]
@@ -675,7 +679,14 @@ def test_recurrent_gradients(tmp_path, device, op_type, direction, variant):
     y, final = module(x, hidden)
     if direction == "reverse":
         y = y.flip(0)
-    (y.sum() + sum(state.sum() for state in (final if op_type == "LSTM" else (final,)))).backward()
+    # PyTorch's y has shape (seq, batch, directions * hidden), with the directions concatenated along the last axis
+    y_upstream = torch.tensor(upstream["y"], dtype=torch.double).permute(0, 2, 1, 3).reshape(y.shape)
+    final_states = final if op_type == "LSTM" else (final,)
+    loss = (y * y_upstream).sum() + sum(
+        (state * torch.tensor(upstream[name], dtype=torch.double)).sum()
+        for name, state in zip(("y_h", "y_c"), final_states)
+    )
+    loss.backward()
 
     for name in ("x", *states):
         np.testing.assert_allclose(arrays[name].grad.numpy(), torch_inputs[name].grad.numpy(), rtol=1.0e-3, atol=1.0e-4)

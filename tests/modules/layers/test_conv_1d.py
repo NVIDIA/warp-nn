@@ -219,5 +219,5 @@ def test_large_shape(capsys, check):
         device="cuda",
         dtype=wp.float32,
         shape=[16, kwargs["in_channels"], 512],
-        **({"atol": 1e-01, "rtol": 1e-02, "weighted": True} if check is check_gradients else {}),
+        **({"atol": 1e-01, "rtol": 1e-02} if check is check_gradients else {}),
     )

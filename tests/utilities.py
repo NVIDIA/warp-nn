@@ -85,7 +85,7 @@ def check_arrays(
     /,
     *,
     flatten: bool = False,
-    rtol: float = 1e-02,
+    rtol: float = 0.0,
     atol: float = 1e-03,
     test: Literal["all-close", "equal", "not-equal"] = "all-close",
     msg: str = "",
@@ -111,10 +111,35 @@ def check_arrays(
             f"limits: [{np.min(abs_diff)}, {np.max(abs_diff)}], sum: {np.sum(abs_diff)}"
         )
         if test == "all-close":
-            assert np.allclose(diff, 0.0, rtol=rtol, atol=atol), f"[all-close] Failed (at index {i}): {msg}: {stats}"
+            # |b - a| <= atol + rtol * |a|, where the first array (a) is the reference
+            assert np.allclose(b, a, rtol=rtol, atol=atol), f"[all-close] Failed (at index {i}): {msg}: {stats}"
         elif test == "equal":
             assert np.array_equiv(diff, 0.0), f"[equal] Failed (at index {i}): {msg}: {stats}"
         elif test == "not-equal":
             assert not np.array_equiv(diff, 0.0), f"[not-equal] Failed (at index {i}): {msg}: {stats}"
         else:
             raise ValueError(f"Invalid test: {test}")
+
+
+def backward(tape: wp.Tape, torch_outputs: list[torch.Tensor], warp_outputs: list[wp.array]) -> None:
+    """Backpropagate the same random upstream gradients through the PyTorch and Warp outputs.
+
+    The upstream gradients are non-uniform (rather than those of the sum of the outputs, i.e., ones),
+    so that the checked gradients depend on how each output element propagates its own gradient
+    (e.g., a backward pass that ignores the incoming gradients, or that mixes up the output indices,
+    yields the same gradients as the reference for the sum of the outputs, but not for a weighted sum).
+    """
+    assert len(torch_outputs) == len(warp_outputs) > 0, "Expected the same (non-zero) number of outputs"
+    # sampled in the precision of the Warp outputs, so that both frameworks use exactly the same values
+    weights = [sample_array(tuple(output.shape)).astype(wp.dtype_to_numpy(output.dtype)) for output in warp_outputs]
+    loss = sum(
+        (output * torch.tensor(w, device=output.device, dtype=output.dtype)).sum()
+        for output, w in zip(torch_outputs, weights, strict=True)
+    )
+    loss.backward()
+    tape.backward(
+        grads={
+            output: wp.array(w, device=output.device, dtype=output.dtype)
+            for output, w in zip(warp_outputs, weights, strict=True)
+        }
+    )

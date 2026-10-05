@@ -87,16 +87,20 @@ def test_extreme_values(capsys, device, dtype, approximate):
     array = array.astype(wp.dtype_to_numpy(dtype))
     torch_input = torch.tensor(array, dtype=torch.float64, requires_grad=True)
     torch_output = torch.nn.functional.gelu(torch_input, approximate=approximate)
-    torch_output.sum().backward()
+    # distinct upstream gradients per element (small integers, exactly representable in half precision)
+    weights = np.arange(1, array.size + 1).astype(array.dtype)
+    (torch_output * torch.tensor(weights, dtype=torch.float64)).sum().backward()
     warp_input = wp.array(array, dtype=dtype, device=device, requires_grad=True)
     tape = wp.Tape()
     with tape:
         warp_output = nn.GELU(approximate=approximate).to(device)(warp_input)
-    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    tape.backward(grads={warp_output: wp.array(weights, dtype=dtype, device=device)})
     # half-precision tolerances include the quantization of subnormal intermediate values
     rtol, atol = (2e-3, 1e-6) if dtype == wp.float16 else (1e-6, 1e-12)
     np.testing.assert_allclose(warp_output.numpy(), torch_output.detach().numpy(), rtol=rtol, atol=atol)
-    np.testing.assert_allclose(warp_input.grad.numpy(), torch_input.grad.numpy(), rtol=rtol, atol=atol)
+    # (the half-precision rounding errors of the gradients grow with the upstream gradients)
+    grad_rtol = 5e-3 if dtype == wp.float16 else rtol
+    np.testing.assert_allclose(warp_input.grad.numpy(), torch_input.grad.numpy(), rtol=grad_rtol, atol=atol)
 
 
 def test_unsupported_input(capsys):

@@ -52,20 +52,6 @@ def test_forward(capsys, device, dtype, ndim, dim):
 def test_gradients(capsys, device, dtype, ndim, dim):
     if not is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
-    # the gradient of the sum of the outputs is zero for Softmax, so check the gradient of a weighted sum too
-    array = utilities.sample_array(shape=[10] * ndim)
-    weights = np.linspace(-1.0, 1.0, 10**ndim, dtype=np.float32).reshape([10] * ndim)
-    # - torch
-    torch_input = torch.tensor(array, requires_grad=True)
-    (torch.nn.Softmax(dim=dim)(torch_input) * torch.tensor(weights)).sum().backward()
-    # - warp
-    warp_input = wp.array(array, device=device, requires_grad=True)
-    tape = wp.Tape()
-    with tape:
-        warp_output = nn.Softmax(dim=dim).to(device)(warp_input)
-    tape.backward(grads={warp_output: wp.array(weights, device=device)})
-    utilities.check_arrays(torch_input.grad, warp_input.grad)
-    # the gradient of the sum of the outputs
     check_gradients(
         warp_activation=nn.Softmax(dim=dim),
         torch_activation=torch.nn.Softmax(dim=dim),

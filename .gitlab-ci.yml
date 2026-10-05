@@ -26,6 +26,7 @@ workflow:
 stages:
   - build
   - test
+  - security
   - deploy
 
 # Define variables
@@ -33,6 +34,33 @@ variables:
   PYTHON_VERSION: "3.10"
   DOCS_DIR: "docs"
   BUILD_DIR: "docs/_build/html"
+  OSEC_SONARQUBE_ENABLED: "true"  # disabled by default in the compliance template
+
+# ========================================================================================
+# Security stage (jobs defined by the compliance template)
+# ========================================================================================
+
+# The template places its jobs in the "test" stage unless this base is overridden
+.osec:stage_base:
+  stage: security
+
+# The template runs these jobs automatically only on the default/protected branches and tags, leaving them as manual
+# jobs in merge requests. Override their rules to run them automatically in merge requests too.
+osec:pulse-trufflehog:
+  rules:
+    - if: $OSEC_PULSE_TRUFFLEHOG_ENABLED != 'true'
+      when: never
+    - if: $CI_MERGE_REQUEST_IID || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_REF_PROTECTED == "true" || $CI_COMMIT_TAG
+      when: always
+    - when: never
+
+osec:sonarqube:
+  rules:
+    - if: $OSEC_SONARQUBE_ENABLED != 'true'
+      when: never
+    - if: $CI_MERGE_REQUEST_IID || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_REF_PROTECTED == "true"
+      when: always
+    - when: never
 
 # ========================================================================================
 # Build stage
@@ -116,6 +144,53 @@ test-docs:
     - echo "Documentation build test passed!"
   only:
     - merge_requests
+
+# Benchmark the modules (vs PyTorch and vs the baseline branch) and expose the reports (HTML, Markdown, JSON and CSV)
+# in the merge request (exposed artifact). Report only: it does not block merging.
+# It runs on a GPU runner, only for merge requests that change the library, the benchmarks, the project configuration
+# or the CI configuration
+benchmark-modules:
+  stage: test
+  needs: []
+  interruptible: true
+  allow_failure: true
+  timeout: 2h
+  image: python:${PYTHON_VERSION}
+  tags:
+    - os/linux
+  variables:
+    BENCHMARK_BASELINE_REF: develop
+    BENCHMARK_OUTPUT_DIR: benchmark-results
+  before_script:
+    - nvidia-smi
+    - pip install --upgrade pip
+    - python -m pip install --quiet torch
+    - pip install -e .[tests]
+    # the baseline implementation is exported from the baseline branch (not fetched by merge request pipelines),
+    # fetched as a local branch so that the report columns are labeled with its name (e.g. "Forward vs develop")
+    - git fetch --quiet --depth=1 origin "+${BENCHMARK_BASELINE_REF}:${BENCHMARK_BASELINE_REF}"
+  script:
+    - python -m benchmarks.benchmark_modules
+        --baseline-ref "${BENCHMARK_BASELINE_REF}"
+        --format markdown html json csv
+        --output-dir "${BENCHMARK_OUTPUT_DIR}"
+  artifacts:
+    when: always
+    expose_as: "Modules benchmark"
+    # literal paths (expose_as does not allow variables): keep them in sync with BENCHMARK_OUTPUT_DIR
+    paths:
+      - benchmark-results/benchmark_modules.html
+      - benchmark-results/benchmark_modules.md
+      - benchmark-results/benchmark_modules.json
+      - benchmark-results/benchmark_modules.csv
+    expire_in: 30 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - warp_nn/**/*
+        - benchmarks/**/*
+        - pyproject.toml
+        - .gitlab-ci.yml
 
 # ========================================================================================
 # Deploy stage

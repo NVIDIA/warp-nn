@@ -72,12 +72,13 @@ def test_boundaries(capsys, device):
     array = np.array([-np.inf, -3.5, -3.0, -2.5, 2.5, 3.0, 3.5], dtype=np.float32)
     torch_input = torch.tensor(array, requires_grad=True)
     torch_output = torch.nn.functional.hardswish(torch_input)
-    torch_output.sum().backward()
+    weights = np.arange(1, array.size + 1, dtype=np.float32)  # distinct upstream gradients per element
+    (torch_output * torch.tensor(weights)).sum().backward()
     warp_input = wp.array(array, device=device, requires_grad=True)
     tape = wp.Tape()
     with tape:
         warp_output = nn.HardSwish().to(device)(warp_input)
-    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    tape.backward(grads={warp_output: wp.array(weights, device=device)})
     # PyTorch yields NaN for -inf (-inf * 0), while the saturated region yields 0
     np.testing.assert_allclose(warp_output.numpy()[1:], torch_output.detach().numpy()[1:], rtol=1e-6)
     assert warp_output.numpy()[0] == 0.0
