@@ -26,6 +26,7 @@ workflow:
 stages:
   - build
   - test
+  - benchmark
   - security
   - deploy
 
@@ -148,9 +149,10 @@ test-docs:
 # Benchmark the modules (vs PyTorch and vs the baseline branch) and expose the reports (HTML, Markdown, JSON and CSV)
 # in the merge request (exposed artifact). Report only: it does not block merging.
 # It runs on a GPU runner, only for merge requests that change the library, the benchmarks, the project configuration
-# or the CI configuration
-benchmark-modules:
-  stage: test
+# or the CI configuration.
+# Base of the benchmark jobs: each job sets the execution mode (BENCHMARK_ARGS) and its own output directory
+.benchmark-modules:
+  stage: benchmark
   needs: []
   interruptible: true
   allow_failure: true
@@ -160,7 +162,7 @@ benchmark-modules:
     - os/linux
   variables:
     BENCHMARK_BASELINE_REF: develop
-    BENCHMARK_OUTPUT_DIR: benchmark-results
+    BENCHMARK_ARGS: ""
   before_script:
     - nvidia-smi
     - pip install --upgrade pip
@@ -174,15 +176,9 @@ benchmark-modules:
         --baseline-ref "${BENCHMARK_BASELINE_REF}"
         --format markdown html json csv
         --output-dir "${BENCHMARK_OUTPUT_DIR}"
+        ${BENCHMARK_ARGS}
   artifacts:
     when: always
-    expose_as: "Modules benchmark"
-    # literal paths (expose_as does not allow variables): keep them in sync with BENCHMARK_OUTPUT_DIR
-    paths:
-      - benchmark-results/benchmark_modules.html
-      - benchmark-results/benchmark_modules.md
-      - benchmark-results/benchmark_modules.json
-      - benchmark-results/benchmark_modules.csv
     expire_in: 30 days
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -191,6 +187,34 @@ benchmark-modules:
         - benchmarks/**/*
         - pyproject.toml
         - .gitlab-ci.yml
+
+# Eager mode (includes the host/launch overhead)
+benchmark-modules-eager:
+  extends: .benchmark-modules
+  variables:
+    BENCHMARK_OUTPUT_DIR: benchmark-results-eager
+  artifacts:
+    expose_as: "Modules benchmark (eager)"
+    # literal paths (expose_as does not allow variables): keep them in sync with BENCHMARK_OUTPUT_DIR
+    paths:
+      - benchmark-results-eager/benchmark_modules.html
+      - benchmark-results-eager/benchmark_modules.md
+      - benchmark-results-eager/benchmark_modules.json
+      - benchmark-results-eager/benchmark_modules.csv
+
+# CUDA graph mode (replays captured graphs: no host overhead)
+benchmark-modules-cuda-graph:
+  extends: .benchmark-modules
+  variables:
+    BENCHMARK_OUTPUT_DIR: benchmark-results-cuda-graph
+    BENCHMARK_ARGS: "--cuda-graph"
+  artifacts:
+    expose_as: "Modules benchmark (CUDA graph)"
+    paths:
+      - benchmark-results-cuda-graph/benchmark_modules.html
+      - benchmark-results-cuda-graph/benchmark_modules.md
+      - benchmark-results-cuda-graph/benchmark_modules.json
+      - benchmark-results-cuda-graph/benchmark_modules.csv
 
 # ========================================================================================
 # Deploy stage
