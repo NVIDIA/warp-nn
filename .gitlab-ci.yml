@@ -181,12 +181,22 @@ test-docs:
     when: always
     expire_in: 30 days
   rules:
+    # merge requests: run the benchmark only for the merge requests
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - warp_nn/**/*
         - benchmarks/**/*
         - pyproject.toml
         - .gitlab-ci.yml
+    # direct commits to the main branches: available on demand (manual), without blocking the pipeline
+    - if: $CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"
+      changes:
+        - warp_nn/**/*
+        - benchmarks/**/*
+        - pyproject.toml
+        - .gitlab-ci.yml
+      when: manual
+      allow_failure: true
 
 # Eager mode (includes the host/launch overhead)
 benchmark-modules-eager:
