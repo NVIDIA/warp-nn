@@ -194,7 +194,7 @@ benchmark-modules-eager:
   variables:
     BENCHMARK_OUTPUT_DIR: benchmark-results-eager
   artifacts:
-    expose_as: "Modules benchmark (eager)"
+    expose_as: "Modules benchmark - eager"
     # literal paths (expose_as does not allow variables): keep them in sync with BENCHMARK_OUTPUT_DIR
     paths:
       - benchmark-results-eager/benchmark_modules.html
@@ -209,7 +209,7 @@ benchmark-modules-cuda-graph:
     BENCHMARK_OUTPUT_DIR: benchmark-results-cuda-graph
     BENCHMARK_ARGS: "--cuda-graph"
   artifacts:
-    expose_as: "Modules benchmark (CUDA graph)"
+    expose_as: "Modules benchmark - CUDA graph"
     paths:
       - benchmark-results-cuda-graph/benchmark_modules.html
       - benchmark-results-cuda-graph/benchmark_modules.md
