@@ -33,7 +33,7 @@ def _create_kernels(
     dilations: tuple[int],
     groups: int,
 ):
-    @wp.kernel
+    @wp.kernel(grid_stride=False)
     def kernel(
         input: wp.array3d[float],  # (batch_size, in_channels, in_signal_length)
         weight: wp.array3d[float],  # shape: (out_channels, in_channels / groups, kernel_size)

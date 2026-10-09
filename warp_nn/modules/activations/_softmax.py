@@ -30,7 +30,7 @@ from warp_nn.utils import contiguous
 # which is single precision for half-precision inputs, to avoid losing the small terms of the sum.
 
 
-@wp.kernel(enable_backward=False)
+@wp.kernel(grid_stride=False, enable_backward=False)
 def _max_kernel(input: wp.array3d[Any], maximum: wp.array3d[Any]):
     i, k = wp.tid()
     value = input[i, 0, k]
@@ -39,7 +39,7 @@ def _max_kernel(input: wp.array3d[Any], maximum: wp.array3d[Any]):
     maximum[i, 0, k] = maximum.dtype(value)
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _sum_exp_kernel(input: wp.array3d[Any], maximum: wp.array3d[Any], total: wp.array3d[Any]):
     i, k = wp.tid()
     m = maximum[i, 0, k]

@@ -22,25 +22,25 @@ import warp as wp
 from warp_nn.utils.config import KernelConfig
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _copy_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
     i = wp.tid()
     output[i] = input[i]
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _copy_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
     i, j = wp.tid()
     output[i, j] = input[i, j]
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _copy_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
     i, j, k = wp.tid()
     output[i, j, k] = input[i, j, k]
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _copy_4d(input: wp.array4d[Any], output: wp.array4d[Any]):
     i, j, k, l = wp.tid()
     output[i, j, k, l] = input[i, j, k, l]

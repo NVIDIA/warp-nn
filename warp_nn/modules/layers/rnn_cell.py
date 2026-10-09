@@ -29,7 +29,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
     def activation(x: float):
         return wp.tanh(x)
 
-    @wp.kernel
+    @wp.kernel(grid_stride=False)
     def kernel(
         input: wp.array2d[float],
         hidden: wp.array2d[float],

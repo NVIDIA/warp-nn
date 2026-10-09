@@ -24,11 +24,11 @@ from warp_nn.utils import KernelConfig, ScopedCapture, resolve_dim
 
 
 def _create_kernels(config: KernelConfig, *, momentum: float, dampening: float, weight_decay: float):
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def increase_timestep(t: wp.array1d[Any]):
         t[0] += 1.0
 
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def optimizer_step(
         parameters: wp.array1d[Any],
         gradients: wp.array1d[Any],
@@ -43,7 +43,7 @@ def _create_kernels(config: KernelConfig, *, momentum: float, dampening: float, 
         tiled_gradients = wp.tile_load(gradients, shape=shape, offset=offset)
         tiled_velocity = wp.tile_load(velocity, shape=shape, offset=offset)
         if wp.static(weight_decay):
-            tiled_gradients = tiled_gradients + wp.static(weight_decay) * tiled_parameters
+            wp.tile_axpy(wp.static(weight_decay), tiled_parameters, tiled_gradients)
         if wp.static(momentum):
             if timestep[0] > 1.0:
                 tiled_velocity = wp.static(momentum) * tiled_velocity + wp.static(1.0 - dampening) * tiled_gradients
@@ -51,7 +51,8 @@ def _create_kernels(config: KernelConfig, *, momentum: float, dampening: float, 
                 tiled_velocity = tiled_gradients
             wp.tile_store(velocity, tiled_velocity, offset=offset)
             tiled_gradients = tiled_velocity
-        wp.tile_store(parameters, tiled_parameters - lr[0] * tiled_gradients, offset=offset)
+        wp.tile_axpy(-lr[0], tiled_gradients, tiled_parameters)
+        wp.tile_store(parameters, tiled_parameters, offset=offset)
 
     return increase_timestep, optimizer_step
 

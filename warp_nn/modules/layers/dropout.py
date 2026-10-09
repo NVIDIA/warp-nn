@@ -29,7 +29,7 @@ from warp_nn.utils import contiguous
 # The mask is stored for the backward pass, since the seed changes after the forward pass.
 
 
-@wp.kernel(enable_backward=False)
+@wp.kernel(grid_stride=False, enable_backward=False)
 def _mask_kernel(seed: wp.array1d[wp.uint32], p: float, scale: float, mask: wp.array1d[Any]):
     i = wp.tid()
     state = wp.rand_init(wp.int32(seed[0]), i)
@@ -39,12 +39,12 @@ def _mask_kernel(seed: wp.array1d[wp.uint32], p: float, scale: float, mask: wp.a
         mask[i] = mask.dtype(0.0)
 
 
-@wp.kernel(enable_backward=False)
+@wp.kernel(grid_stride=False, enable_backward=False)
 def _increment_seed_kernel(seed: wp.array1d[wp.uint32]):
     seed[0] = seed[0] + wp.uint32(1)
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _apply_mask_kernel(input: wp.array1d[Any], mask: wp.array1d[Any], output: wp.array1d[Any]):
     i = wp.tid()
     output[i] = input[i] * mask[i]

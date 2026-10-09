@@ -20,7 +20,7 @@ import warp as wp
 from warp_nn.modules.activations._softmax import SoftmaxBase, overload_kernels
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _softmax_kernel(input: wp.array3d[Any], maximum: wp.array3d[Any], total: wp.array3d[Any], output: wp.array3d[Any]):
     i, j, k = wp.tid()
     m = maximum[i, 0, k]

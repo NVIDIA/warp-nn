@@ -42,7 +42,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         n = wp.tanh(gate_in + r * gate_hn)
         return (1.0 - z) * n + z * hidden
 
-    @wp.kernel
+    @wp.kernel(grid_stride=False)
     def kernel(
         input: wp.array2d[float],
         hidden: wp.array2d[float],

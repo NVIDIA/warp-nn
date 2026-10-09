@@ -32,6 +32,10 @@ INT_DTYPES = (wp.int8, wp.int16, wp.int32, wp.int64, wp.uint8, wp.uint16, wp.uin
 # captured by closure functions via wp.static) to specialize the kernels, whose source code is otherwise identical.
 # Integer operations are not differentiable, and CUDA lacks the 8/16-bit atomics their adjoints would require,
 # so their backward pass is disabled. Otherwise, it follows the global setting (wp.config.enable_backward).
+#
+# Like every warp-nn kernel, they are compiled without the grid-stride loop (grid_stride=False): kernels are launched
+# with one thread per launch index (no max_blocks), so the loop never iterates, and removing it lowers the per-thread
+# overhead and register pressure. Launching them with max_blocks > 0 on CUDA devices raises an error.
 
 
 @wp.func
@@ -69,7 +73,7 @@ def create_unary_kernels(
     """
     enable_backward = None if all(wp.types.type_is_float(dtype) for dtype in dtypes) else False
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_1d(input: wp.array1d[Any], output: wp.array1d[Any]):
         i = wp.tid()
         shape = (wp.static(config.tile_1d[0]),)
@@ -77,7 +81,7 @@ def create_unary_kernels(
         tile = wp.tile_map(wp.static(function), wp.tile_load(input, shape=shape, offset=offset))
         wp.tile_store(output, tile, offset=offset)
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_2d(input: wp.array2d[Any], output: wp.array2d[Any]):
         i, j = wp.tid()
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
@@ -85,7 +89,7 @@ def create_unary_kernels(
         tile = wp.tile_map(wp.static(function), wp.tile_load(input, shape=shape, offset=offset))
         wp.tile_store(output, tile, offset=offset)
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_3d(input: wp.array3d[Any], output: wp.array3d[Any]):
         i, j, k = wp.tid()
         shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))
@@ -111,7 +115,7 @@ def create_binary_kernels(
     """
     enable_backward = None if all(wp.types.type_is_float(dtype) for dtype in dtypes) else False
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_1d(a: wp.array1d[Any], b: wp.array1d[Any], output: wp.array1d[Any]):
         i = wp.tid()
         shape = (wp.static(config.tile_1d[0]),)
@@ -123,7 +127,7 @@ def create_binary_kernels(
         )
         wp.tile_store(output, tile, offset=offset)
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_2d(a: wp.array2d[Any], b: wp.array2d[Any], output: wp.array2d[Any]):
         i, j = wp.tid()
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
@@ -135,7 +139,7 @@ def create_binary_kernels(
         )
         wp.tile_store(output, tile, offset=offset)
 
-    @wp.kernel(enable_backward=enable_backward, module="unique")
+    @wp.kernel(grid_stride=False, enable_backward=enable_backward, module="unique")
     def kernel_3d(a: wp.array3d[Any], b: wp.array3d[Any], output: wp.array3d[Any]):
         i, j, k = wp.tid()
         shape = (wp.static(config.tile_3d[0]), wp.static(config.tile_3d[1]), wp.static(config.tile_3d[2]))

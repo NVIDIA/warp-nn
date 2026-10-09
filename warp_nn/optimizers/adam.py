@@ -28,11 +28,11 @@ def _create_kernels(config: KernelConfig, *, betas: tuple[float, float], eps: fl
     def hat_ratio(m1_hat: wp.float32, m2_hat: wp.float32) -> wp.float32:
         return m1_hat / (wp.sqrt(m2_hat) + wp.static(eps))
 
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def increase_timestep(t: wp.array1d[Any]):
         t[0] += 1.0
 
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def optimizer_step(
         parameters: wp.array1d[Any],
         gradients: wp.array1d[Any],
@@ -58,9 +58,8 @@ def _create_kernels(config: KernelConfig, *, betas: tuple[float, float], eps: fl
 
         wp.tile_store(m1, tiled_m1, offset=offset)
         wp.tile_store(m2, tiled_m2, offset=offset)
-        wp.tile_store(
-            parameters, tiled_parameters - lr[0] * wp.tile_map(wp.static(hat_ratio), m1_hat, m2_hat), offset=offset
-        )
+        wp.tile_axpy(-lr[0], wp.tile_map(wp.static(hat_ratio), m1_hat, m2_hat), tiled_parameters)
+        wp.tile_store(parameters, tiled_parameters, offset=offset)
 
     return increase_timestep, optimizer_step
 

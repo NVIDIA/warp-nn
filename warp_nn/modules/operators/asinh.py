@@ -25,12 +25,15 @@ from warp_nn.utils import get_kernel_config, resolve_dim
 def _create_function():
     @wp.func
     def function(x: Any):
+        # asinh(±0) = ±0 with derivative 1 (at -0, the adjoint of copysign below would flip the gradient's sign)
+        if x == x.dtype(0.0):
+            return x
         # sign(x) * log(|x| + sqrt(x^2 + 1)), factored for |x| > 1 to avoid overflowing x^2
         a = wp.abs(x)
         if a > x.dtype(1.0):
-            return wp.sign(x) * (wp.log(a) + wp.log(x.dtype(1.0) + wp.sqrt(x.dtype(1.0) + x.dtype(1.0) / (a * a))))
+            return wp.copysign(wp.log(a) + wp.log(x.dtype(1.0) + wp.sqrt(x.dtype(1.0) + x.dtype(1.0) / (a * a))), x)
         # sign(x) * log1p(|x| + x^2 / (1 + sqrt(x^2 + 1))), accurate for small |x|
-        return wp.sign(x) * log1p(a + a * a / (x.dtype(1.0) + wp.sqrt(a * a + x.dtype(1.0))))
+        return wp.copysign(log1p(a + a * a / (x.dtype(1.0) + wp.sqrt(a * a + x.dtype(1.0)))), x)
 
     return function
 

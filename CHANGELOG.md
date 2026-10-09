@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+### Changed
+- Compile the CUDA kernels without the grid-stride loop: `@wp.kernel(grid_stride=False)`
+
+### Fixed
+- Fix `Asinh` and `Atanh` to preserve the sign of zero (`-0.0` input returns `-0.0`)
+
 ## [0.4.0] - 2026-10-01
 ### Added
 - Add `Abs`, `Acos`, `Acosh`, `Add`, `Asin`, `Asinh`, `Atan`, `Atanh`, `AvgPool1D`, `AvgPool2D`, `BatchNorm`,

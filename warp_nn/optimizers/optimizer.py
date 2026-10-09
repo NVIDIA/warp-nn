@@ -32,15 +32,15 @@ def _create_clip_by_total_norm_kernels(config: KernelConfig, *, max_norm: float)
             return x / norm * wp.static(max_norm)
         return x
 
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def sum_squares(gradients: wp.array1d[Any], sum_squares: wp.array1d[Any]):
         i = wp.tid()
         shape = (wp.static(config.tile_1d[0]),)
         offset = (i * wp.static(config.tile_1d[0]),)
         tiled_gradients = wp.tile_load(gradients, shape=shape, offset=offset)
-        wp.tile_atomic_add(sum_squares, wp.tile_sum(wp.tile_map(wp.mul, tiled_gradients, tiled_gradients)))
+        wp.tile_atomic_add(sum_squares, wp.tile_dot(tiled_gradients, tiled_gradients))
 
-    @wp.kernel(enable_backward=False)
+    @wp.kernel(grid_stride=False, enable_backward=False)
     def clip_by_total_norm(gradients: wp.array1d[Any], sum_squares: wp.array1d[Any]):
         i = wp.tid()
         shape = (wp.static(config.tile_1d[0]),)

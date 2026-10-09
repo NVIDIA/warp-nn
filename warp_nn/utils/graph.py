@@ -28,6 +28,7 @@ class ScopedCapture:
         stream: wp.Stream | None = None,
         force_module_load: bool | None = None,
         external: bool = False,
+        capture_mode: wp.CaptureMode = wp.CaptureMode.THREAD_LOCAL,
         enabled: bool = True,
     ) -> None:
         """Context manager for capturing CUDA graphs.
@@ -39,6 +40,8 @@ class ScopedCapture:
         :param stream: CUDA stream to capture on. If not specified, the default stream will be used.
         :param force_module_load: Whether to force loading of all kernels before capture.
         :param external: Whether the capture was already started externally.
+        :param capture_mode: CUDA stream capture mode. Use :py:attr:`warp.CaptureMode.RELAXED` when composing
+            with libraries that perform capture-unsafe runtime calls during the capture.
         :param enabled: Whether to enable the capture. If disabled, the capture will be skipped and the graph will be None.
         """
         self._graph = None
@@ -48,6 +51,7 @@ class ScopedCapture:
             self._stream = stream
             self._force_module_load = force_module_load
             self._external = external
+            self._capture_mode = capture_mode
             self._active = False
 
     @property
@@ -59,16 +63,14 @@ class ScopedCapture:
         """Begin capture of a CUDA graph"""
         if self._enabled:
             self._graph = None
-            try:
-                wp.capture_begin(
-                    device=self._device,
-                    stream=self._stream,
-                    force_module_load=self._force_module_load,
-                    external=self._external,
-                )
-                self._active = True
-            except:
-                raise
+            wp.capture_begin(
+                device=self._device,
+                stream=self._stream,
+                force_module_load=self._force_module_load,
+                external=self._external,
+                capture_mode=self._capture_mode,
+            )
+            self._active = True
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

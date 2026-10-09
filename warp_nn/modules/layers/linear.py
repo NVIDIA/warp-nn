@@ -25,7 +25,7 @@ from ._common import tile_transposed_gemm_2d
 
 def _create_kernels(config: KernelConfig, *, include_bias: bool):
 
-    @wp.kernel
+    @wp.kernel(grid_stride=False)
     def kernel(
         input: wp.array2d[float],  # (batch_size, in_features)
         weight: wp.array2d[float],  # (out_features, in_features)

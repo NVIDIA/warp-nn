@@ -27,7 +27,7 @@ import warp as wp
 _CHUNK_SIZE = wp.constant(256)
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _partial_sums_kernel(input: wp.array3d[float], partial: wp.array2d[float]):
     b, k = wp.tid()
     inner = input.shape[2]
@@ -39,7 +39,7 @@ def _partial_sums_kernel(input: wp.array3d[float], partial: wp.array2d[float]):
     partial[b, k] = total
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _partial_squares_kernel(
     input: wp.array3d[float], mean: wp.array1d[float], centered: bool, partial: wp.array2d[float]
 ):
@@ -58,7 +58,7 @@ def _partial_squares_kernel(
     partial[b, k] = total
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _average_kernel(partial: wp.array2d[float], count: int, output: wp.array1d[float]):
     b = wp.tid()
     total = float(0.0)
@@ -118,7 +118,7 @@ class Moments:
         )
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def _normalize_kernel(
     input: wp.array3d[float],  # (batch, channels, features)
     mean: wp.array1d[float],
@@ -147,7 +147,7 @@ def _normalize_kernel(
     output[n, c, s] = y
 
 
-@wp.kernel(enable_backward=False)
+@wp.kernel(grid_stride=False, enable_backward=False)
 def update_running_stats_kernel(
     mean: wp.array1d[float],
     var: wp.array1d[float],

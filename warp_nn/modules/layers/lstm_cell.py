@@ -47,7 +47,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         o = sigmoid(gate_io + gate_ho)
         return o * wp.tanh(cell)
 
-    @wp.kernel
+    @wp.kernel(grid_stride=False)
     def kernel(
         input: wp.array2d[float],
         hidden: wp.array2d[float],

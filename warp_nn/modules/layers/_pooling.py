@@ -21,7 +21,7 @@ import warp as wp
 # and then gathers the maximum values, so that the gradient is routed to the selected elements only.
 
 
-@wp.kernel(enable_backward=False)
+@wp.kernel(grid_stride=False, enable_backward=False)
 def max_pool_indices_kernel(
     input: wp.array4d[float],
     kernel_size: wp.vec2i,
@@ -48,7 +48,7 @@ def max_pool_indices_kernel(
     indices[n, c, oh, ow] = index
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def gather_kernel(input: wp.array4d[float], indices: wp.array4d[wp.int32], output: wp.array4d[float]):
     n, c, oh, ow = wp.tid()
     index = indices[n, c, oh, ow]
@@ -58,7 +58,7 @@ def gather_kernel(input: wp.array4d[float], indices: wp.array4d[wp.int32], outpu
         output[n, c, oh, ow] = -wp.inf
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def avg_pool_kernel(
     input: wp.array4d[float],
     kernel_size: wp.vec2i,

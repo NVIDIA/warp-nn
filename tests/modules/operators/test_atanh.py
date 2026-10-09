@@ -75,3 +75,23 @@ def test_values(capsys, device):
         pytest.skip(f"Device '{device}' is not available")
     # small inputs (accurate) and inputs close to the domain boundaries
     check_values(module=nn.Atanh(), values=[1e-8, -1e-8, 0.5, -0.999, 0.999], numpy_function=np.arctanh, device=device)
+
+
+# test-specific parameters
+@pytest.mark.parametrize("dtype", [wp.float16, wp.float32, wp.float64])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_signed_zero(capsys, device, dtype):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    module = nn.Atanh().to(device)
+    torch_input = torch.tensor([0.0, -0.0], dtype=torch.float64, requires_grad=True)
+    warp_input = wp.array(torch_input.detach().numpy(), dtype=dtype, device=device, requires_grad=True)
+    tape = wp.Tape()
+    with tape:
+        warp_output = module(warp_input)
+    tape.backward(grads={warp_output: wp.ones_like(warp_output)})
+    torch_output = torch.atanh(torch_input)
+    torch_output.sum().backward()
+    # the sign of zero is preserved, and the derivative at both zeros is 1
+    np.testing.assert_array_equal(np.signbit(warp_output.numpy()), np.signbit(torch_output.detach().numpy()))
+    np.testing.assert_array_equal(warp_input.grad.numpy(), torch_input.grad.numpy())

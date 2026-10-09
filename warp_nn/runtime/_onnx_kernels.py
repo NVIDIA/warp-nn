@@ -18,7 +18,7 @@
 import warp as wp
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def sequence_first_to_batch_first(input: wp.array3d[wp.float32], reverse: int, output: wp.array3d[wp.float32]):
     """Convert an input sequence ``(seq_length, batch_size, features)`` into ``(batch_size, seq_length, features)``,
     optionally reversing the order of the time steps."""
@@ -29,7 +29,7 @@ def sequence_first_to_batch_first(input: wp.array3d[wp.float32], reverse: int, o
         output[b, t, i] = input[t, b, i]
 
 
-@wp.kernel
+@wp.kernel(grid_stride=False)
 def batch_first_to_onnx_sequence(input: wp.array3d[wp.float32], reverse: int, output: wp.array4d[wp.float32]):
     """Convert an output sequence ``(batch_size, seq_length, num_directions * hidden_size)`` into the ONNX layout
     ``(seq_length, num_directions, batch_size, hidden_size)``, optionally reversing the order of the time steps."""
