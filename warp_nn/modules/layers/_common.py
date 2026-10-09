@@ -106,20 +106,24 @@ def tile_dual_gemm_2d(shape: tuple[int, int], residual_dim: int | None = None):
         index: tuple[int, int],
     ):
         i, j = index[0], index[1]
-        # the products share a single loop (consecutive loops with tile_matmul segfault in the backward
-        # pass); the loads of the shorter operand pair beyond its reduction size are zero-padded
-        d = wp.max(A1.shape[1], A2.shape[1])
-        count = d / residual_dim
-        if d % residual_dim:
-            count += 1
+        # the products share a single loop (consecutive loops with tile_matmul segfault in the backward pass),
+        # but each one only iterates over its own reduction size (instead of multiplying zero-padded tiles)
+        count1 = A1.shape[1] / residual_dim
+        if A1.shape[1] % residual_dim:
+            count1 += 1
+        count2 = A2.shape[1] / residual_dim
+        if A2.shape[1] % residual_dim:
+            count2 += 1
         C = wp.tile_zeros(shape=(d0, d1), dtype=A1.dtype)
-        for k in range(count):
-            a1 = wp.tile_load(A1, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
-            b1 = wp.tile_load(B1, shape=(residual_dim, d1), offset=(k * residual_dim, j * d1))
-            wp.tile_matmul(a1, b1, C)
-            a2 = wp.tile_load(A2, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
-            b2 = wp.tile_load(B2, shape=(residual_dim, d1), offset=(k * residual_dim, j * d1))
-            wp.tile_matmul(a2, b2, C)
+        for k in range(wp.max(count1, count2)):
+            if k < count1:
+                a1 = wp.tile_load(A1, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
+                b1 = wp.tile_load(B1, shape=(residual_dim, d1), offset=(k * residual_dim, j * d1))
+                wp.tile_matmul(a1, b1, C)
+            if k < count2:
+                a2 = wp.tile_load(A2, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
+                b2 = wp.tile_load(B2, shape=(residual_dim, d1), offset=(k * residual_dim, j * d1))
+                wp.tile_matmul(a2, b2, C)
         return C
 
     return function
@@ -143,20 +147,24 @@ def tile_transposed_dual_gemm_2d(shape: tuple[int, int], residual_dim: int | Non
         index: tuple[int, int],
     ):
         i, j = index[0], index[1]
-        # the products share a single loop (consecutive loops with tile_matmul segfault in the backward
-        # pass); the loads of the shorter operand pair beyond its reduction size are zero-padded
-        d = wp.max(A1.shape[1], A2.shape[1])
-        count = d / residual_dim
-        if d % residual_dim:
-            count += 1
+        # the products share a single loop (consecutive loops with tile_matmul segfault in the backward pass),
+        # but each one only iterates over its own reduction size (instead of multiplying zero-padded tiles)
+        count1 = A1.shape[1] / residual_dim
+        if A1.shape[1] % residual_dim:
+            count1 += 1
+        count2 = A2.shape[1] / residual_dim
+        if A2.shape[1] % residual_dim:
+            count2 += 1
         C = wp.tile_zeros(shape=(d1, d0), dtype=A1.dtype)
-        for k in range(count):
-            a1 = wp.tile_load(A1, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
-            b1 = wp.tile_load(B1, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
-            wp.tile_matmul(a1, wp.tile_transpose(b1), C)
-            a2 = wp.tile_load(A2, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
-            b2 = wp.tile_load(B2, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
-            wp.tile_matmul(a2, wp.tile_transpose(b2), C)
+        for k in range(wp.max(count1, count2)):
+            if k < count1:
+                a1 = wp.tile_load(A1, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
+                b1 = wp.tile_load(B1, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
+                wp.tile_matmul(a1, wp.tile_transpose(b1), C)
+            if k < count2:
+                a2 = wp.tile_load(A2, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
+                b2 = wp.tile_load(B2, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
+                wp.tile_matmul(a2, wp.tile_transpose(b2), C)
         return C
 
     return function
