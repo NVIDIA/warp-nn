@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### Changed
+- Update default kernel configuration for tiles of 1024 elements
 - Compile the CUDA kernels without the grid-stride loop: `@wp.kernel(grid_stride=False)`
 
 ### Fixed

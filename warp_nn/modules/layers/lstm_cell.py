@@ -20,7 +20,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
 
-from ._common import tile_transposed_gemm_2d
+from ._common import tile_transposed_dual_gemm_2d
 
 
 def _create_kernels(config: KernelConfig, *, include_bias: bool):
@@ -34,18 +34,12 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         return 1.0 / (1.0 + wp.exp(-x))
 
     @wp.func
-    def compute_cell_state(
-        cell: float, gate_ii: float, gate_hi: float, gate_if: float, gate_hf: float, gate_ig: float, gate_hg: float
-    ):
-        i = sigmoid(gate_ii + gate_hi)
-        f = sigmoid(gate_if + gate_hf)
-        g = wp.tanh(gate_ig + gate_hg)
-        return f * cell + i * g
+    def compute_cell_state(cell: float, gate_i: float, gate_f: float, gate_g: float):
+        return sigmoid(gate_f) * cell + sigmoid(gate_i) * wp.tanh(gate_g)
 
     @wp.func
-    def compute_hidden_state(cell: float, gate_io: float, gate_ho: float):
-        o = sigmoid(gate_io + gate_ho)
-        return o * wp.tanh(cell)
+    def compute_hidden_state(cell: float, gate_o: float):
+        return sigmoid(gate_o) * wp.tanh(cell)
 
     @wp.kernel(grid_stride=False)
     def kernel(
@@ -75,31 +69,41 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
         t_cell = wp.tile_transpose(wp.tile_load(cell, shape=shape, offset=offset))
-        gate_ii = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_ii, input, index=(i, j))
-        gate_if = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_if, input, index=(i, j))
-        gate_ig = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_ig, input, index=(i, j))
-        gate_io = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_io, input, index=(i, j))
-        gate_hi = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hi, hidden, index=(i, j))
-        gate_hf = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hf, hidden, index=(i, j))
-        gate_hg = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hg, hidden, index=(i, j))
-        gate_ho = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_ho, hidden, index=(i, j))
+        # each gate accumulates its input-to-hidden and hidden-to-hidden products in a single tile
+        tile_transposed_dual_gemm_2d_fn = wp.static(tile_transposed_dual_gemm_2d(config.tile_2d))
+        gate_i = tile_transposed_dual_gemm_2d_fn(weight_ii, input, weight_hi, hidden, index=(i, j))
+        gate_f = tile_transposed_dual_gemm_2d_fn(weight_if, input, weight_hf, hidden, index=(i, j))
+        gate_g = tile_transposed_dual_gemm_2d_fn(weight_ig, input, weight_hg, hidden, index=(i, j))
+        gate_o = tile_transposed_dual_gemm_2d_fn(weight_io, input, weight_ho, hidden, index=(i, j))
         if wp.static(include_bias):
             shape_T = (wp.static(config.tile_2d[1]), wp.static(config.tile_2d[0]))
             shape_b = (wp.static(config.tile_2d[1]), 1)
             offset_b = (j * wp.static(config.tile_2d[1]), 0)
-            gate_ii += wp.tile_broadcast(wp.tile_load(bias_ii, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_if += wp.tile_broadcast(wp.tile_load(bias_if, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_ig += wp.tile_broadcast(wp.tile_load(bias_ig, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_io += wp.tile_broadcast(wp.tile_load(bias_io, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hi += wp.tile_broadcast(wp.tile_load(bias_hi, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hf += wp.tile_broadcast(wp.tile_load(bias_hf, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hg += wp.tile_broadcast(wp.tile_load(bias_hg, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_ho += wp.tile_broadcast(wp.tile_load(bias_ho, shape=shape_b, offset=offset_b), shape=shape_T)
+            gate_i += wp.tile_broadcast(
+                wp.tile_load(bias_ii, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_hi, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
+            gate_f += wp.tile_broadcast(
+                wp.tile_load(bias_if, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_hf, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
+            gate_g += wp.tile_broadcast(
+                wp.tile_load(bias_ig, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_hg, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
+            gate_o += wp.tile_broadcast(
+                wp.tile_load(bias_io, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_ho, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
         # HACK: the cell state is computed twice (for the output and for the hidden state), since Warp computes wrong
         # gradients when the same tile is both used by another tile_map and stored transposed
-        c = wp.tile_map(compute_cell_state, t_cell, gate_ii, gate_hi, gate_if, gate_hf, gate_ig, gate_hg)
-        c_h = wp.tile_map(compute_cell_state, t_cell, gate_ii, gate_hi, gate_if, gate_hf, gate_ig, gate_hg)
-        h = wp.tile_map(compute_hidden_state, c_h, gate_io, gate_ho)
+        c = wp.tile_map(compute_cell_state, t_cell, gate_i, gate_f, gate_g)
+        c_h = wp.tile_map(compute_cell_state, t_cell, gate_i, gate_f, gate_g)
+        h = wp.tile_map(compute_hidden_state, c_h, gate_o)
         wp.tile_store(output_hidden, wp.tile_transpose(h), offset=offset)
         wp.tile_store(output_cell, wp.tile_transpose(c), offset=offset)
 

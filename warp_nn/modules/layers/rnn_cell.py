@@ -41,8 +41,9 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
     ):
         i, j = wp.tid()
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        gate_ih = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_ih, input, index=(i, j))
-        gate_hh = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hh, hidden, index=(i, j))
+        tile_transposed_gemm_2d_fn = wp.static(tile_transposed_gemm_2d(config.tile_2d))
+        gate_ih = tile_transposed_gemm_2d_fn(weight_ih, input, index=(i, j))
+        gate_hh = tile_transposed_gemm_2d_fn(weight_hh, hidden, index=(i, j))
         if wp.static(include_bias):
             shape_T = (wp.static(config.tile_2d[1]), wp.static(config.tile_2d[0]))
             shape_b = (wp.static(config.tile_2d[1]), 1)

@@ -24,11 +24,13 @@ import threading
 
 _context = threading.local()  # thread-local storage to handle nested contexts and concurrent access
 
+# [start-default-config]
 _BLOCK_DIM = 256
-_TILE_1D = (64,)  # 64
-_TILE_2D = (16, 16)  # 256
-_TILE_3D = (8, 8, 8)  # 512
-_TILE_4D = (4, 4, 4, 4)  # 256
+_TILE_1D = (1024,)  # 1024 elements
+_TILE_2D = (16, 64)  # 1024 elements
+_TILE_3D = (4, 8, 32)  # 1024 elements
+_TILE_4D = (2, 4, 8, 16)  # 1024 elements
+# [end-default-config]
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)

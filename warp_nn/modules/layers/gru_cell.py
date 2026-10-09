@@ -20,7 +20,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
 
-from ._common import tile_transposed_gemm_2d
+from ._common import tile_transposed_dual_gemm_2d, tile_transposed_gemm_2d
 
 
 def _create_kernels(config: KernelConfig, *, include_bias: bool):
@@ -34,11 +34,9 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         return 1.0 / (1.0 + wp.exp(-x))
 
     @wp.func
-    def compute_hidden_state(
-        hidden: float, gate_ir: float, gate_hr: float, gate_iz: float, gate_hz: float, gate_in: float, gate_hn: float
-    ):
-        r = sigmoid(gate_ir + gate_hr)
-        z = sigmoid(gate_iz + gate_hz)
+    def compute_hidden_state(hidden: float, gate_r: float, gate_z: float, gate_in: float, gate_hn: float):
+        r = sigmoid(gate_r)
+        z = sigmoid(gate_z)
         n = wp.tanh(gate_in + r * gate_hn)
         return (1.0 - z) * n + z * hidden
 
@@ -64,23 +62,30 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
         t_hidden = wp.tile_transpose(wp.tile_load(hidden, shape=shape, offset=offset))
-        gate_ir = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_ir, input, index=(i, j))
-        gate_iz = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_iz, input, index=(i, j))
-        gate_in = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_in, input, index=(i, j))
-        gate_hr = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hr, hidden, index=(i, j))
-        gate_hz = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hz, hidden, index=(i, j))
-        gate_hn = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight_hn, hidden, index=(i, j))
+        # the reset and update gates accumulate their input-to-hidden and hidden-to-hidden products in a single tile
+        tile_transposed_gemm_2d_fn = wp.static(tile_transposed_gemm_2d(config.tile_2d))
+        tile_transposed_dual_gemm_2d_fn = wp.static(tile_transposed_dual_gemm_2d(config.tile_2d))
+        gate_r = tile_transposed_dual_gemm_2d_fn(weight_ir, input, weight_hr, hidden, index=(i, j))
+        gate_z = tile_transposed_dual_gemm_2d_fn(weight_iz, input, weight_hz, hidden, index=(i, j))
+        gate_in = tile_transposed_gemm_2d_fn(weight_in, input, index=(i, j))
+        gate_hn = tile_transposed_gemm_2d_fn(weight_hn, hidden, index=(i, j))
         if wp.static(include_bias):
             shape_T = (wp.static(config.tile_2d[1]), wp.static(config.tile_2d[0]))
             shape_b = (wp.static(config.tile_2d[1]), 1)
             offset_b = (j * wp.static(config.tile_2d[1]), 0)
-            gate_ir += wp.tile_broadcast(wp.tile_load(bias_ir, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_iz += wp.tile_broadcast(wp.tile_load(bias_iz, shape=shape_b, offset=offset_b), shape=shape_T)
+            gate_r += wp.tile_broadcast(
+                wp.tile_load(bias_ir, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_hr, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
+            gate_z += wp.tile_broadcast(
+                wp.tile_load(bias_iz, shape=shape_b, offset=offset_b)
+                + wp.tile_load(bias_hz, shape=shape_b, offset=offset_b),
+                shape=shape_T,
+            )
             gate_in += wp.tile_broadcast(wp.tile_load(bias_in, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hr += wp.tile_broadcast(wp.tile_load(bias_hr, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hz += wp.tile_broadcast(wp.tile_load(bias_hz, shape=shape_b, offset=offset_b), shape=shape_T)
             gate_hn += wp.tile_broadcast(wp.tile_load(bias_hn, shape=shape_b, offset=offset_b), shape=shape_T)
-        h = wp.tile_map(compute_hidden_state, t_hidden, gate_ir, gate_hr, gate_iz, gate_hz, gate_in, gate_hn)
+        h = wp.tile_map(compute_hidden_state, t_hidden, gate_r, gate_z, gate_in, gate_hn)
         wp.tile_store(output, wp.tile_transpose(h), offset=offset)
 
     return kernel
