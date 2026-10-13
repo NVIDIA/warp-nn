@@ -118,7 +118,7 @@ def _group(results: Iterable[Result]) -> list[tuple[str, list[list[Result]]]]:
     # results grouped by category (in the order of CATEGORIES) and by module (in the order of the results)
     results = list(results)
     groups = []
-    for category in CATEGORIES:
+    for category in dict.fromkeys((*CATEGORIES, *(result.category for result in results))):
         selected = [result for result in results if result.category == category]
         modules = [list(group) for _, group in itertools.groupby(selected, key=lambda result: result.module)]
         if modules:
@@ -181,7 +181,7 @@ def to_markdown(results: list[Result], metadata: dict[str, Any]) -> str:
     :return: The Markdown report.
     """
     columns = _columns(metadata)
-    lines = ["# warp-nn modules benchmark", ""]
+    lines = [f"# {metadata.get('title', 'warp-nn modules benchmark')}", ""]
     lines += [f"- **{key}:** {value}" for key, value in _metadata_lines(metadata)]
     markers = (
         f"{MARKDOWN_MARKERS['faster']} significantly faster, {MARKDOWN_MARKERS['slower']} significantly slower, "
@@ -325,10 +325,10 @@ def to_html(results: list[Result], metadata: dict[str, Any]) -> str:
     parts = [
         "<!DOCTYPE html>",
         '<html lang="en">',
-        '<head><meta charset="utf-8"><title>warp-nn modules benchmark</title>',
+        f'<head><meta charset="utf-8"><title>{escape(metadata.get("title", "warp-nn modules benchmark"))}</title>',
         f"<style>{_HTML_STYLE}</style></head>",
         "<body>",
-        "<h1>warp-nn modules benchmark</h1>",
+        f"<h1>{escape(metadata.get('title', 'warp-nn modules benchmark'))}</h1>",
         '<table class="metadata">',
     ]
     parts += [

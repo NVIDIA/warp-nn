@@ -226,6 +226,45 @@ benchmark-modules-cuda-graph:
       - benchmark-results-cuda-graph/benchmark_modules.json
       - benchmark-results-cuda-graph/benchmark_modules.csv
 
+# Newton actuator networks vs PyTorch (network inference only).
+.benchmark-newton-networks:
+  extends: .benchmark-modules
+  before_script:
+    - nvidia-smi
+    - pip install --upgrade pip
+    - pip install -e .[tests]
+  script:
+    - python -m benchmarks.benchmark_newton_networks
+        --device cuda:0
+        --format markdown html json csv
+        --output-dir "${BENCHMARK_OUTPUT_DIR}"
+        ${BENCHMARK_ARGS}
+
+benchmark-newton-networks-eager:
+  extends: .benchmark-newton-networks
+  variables:
+    BENCHMARK_OUTPUT_DIR: benchmark-results-newton-eager
+  artifacts:
+    expose_as: "Newton networks benchmark - eager"
+    paths:
+      - benchmark-results-newton-eager/benchmark_newton_networks.html
+      - benchmark-results-newton-eager/benchmark_newton_networks.md
+      - benchmark-results-newton-eager/benchmark_newton_networks.json
+      - benchmark-results-newton-eager/benchmark_newton_networks.csv
+
+benchmark-newton-networks-cuda-graph:
+  extends: .benchmark-newton-networks
+  variables:
+    BENCHMARK_OUTPUT_DIR: benchmark-results-newton-cuda-graph
+    BENCHMARK_ARGS: "--cuda-graph"
+  artifacts:
+    expose_as: "Newton networks benchmark - CUDA graph"
+    paths:
+      - benchmark-results-newton-cuda-graph/benchmark_newton_networks.html
+      - benchmark-results-newton-cuda-graph/benchmark_newton_networks.md
+      - benchmark-results-newton-cuda-graph/benchmark_newton_networks.json
+      - benchmark-results-newton-cuda-graph/benchmark_newton_networks.csv
+
 # ========================================================================================
 # Deploy stage
 # ========================================================================================

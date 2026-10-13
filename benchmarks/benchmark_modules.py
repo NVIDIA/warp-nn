@@ -166,7 +166,14 @@ def collect_metadata(args: argparse.Namespace, *, date: str, baseline_commit: st
     }
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "python -m benchmarks.benchmark_modules",
+    output_name: str = "benchmark_modules",
+    no_baseline: bool = False,
+    categories: tuple[str, ...] = CATEGORIES,
+) -> argparse.Namespace:
     """Parse the command line arguments.
 
     :param argv: The command line arguments (without the program name), or None to use ``sys.argv``.
@@ -174,18 +181,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     :return: The parsed arguments.
     """
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.benchmark_modules",
-        description=__doc__.split("\n\n")[0],
+        prog=prog,
+        description=f"Benchmark {output_name.removeprefix('benchmark_').replace('_', ' ')} in Warp-NN against PyTorch.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_argument_group("selection")
-    group.add_argument("--categories", nargs="+", choices=CATEGORIES, help="module categories (default: all)")
+    group.add_argument("--categories", nargs="+", choices=categories, help="module categories (default: all)")
     group.add_argument("--modules", nargs="+", metavar="PATTERN", help="module name patterns, e.g. 'Conv*'")
     group.add_argument("--batch-sizes", nargs="+", type=int, default=list(BATCH_SIZES), help="batch sizes")
     group.add_argument("--list", action="store_true", help="list the selected modules and exit")
     group = parser.add_argument_group("implementations")
     group.add_argument("--baseline-ref", default="develop", help="git reference of the baseline implementation")
-    group.add_argument("--no-baseline", action="store_true", help="do not benchmark the baseline implementation")
+    group.add_argument(
+        "--no-baseline", action="store_true", default=no_baseline, help="do not benchmark the baseline implementation"
+    )
     group.add_argument("--device", default="cuda:0" if wp.is_cuda_available() else "cpu", help="device")
     group.add_argument("--cuda-graph", action="store_true", help="replay captured CUDA graphs (no host overhead)")
     group.add_argument(
@@ -221,7 +230,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     group.add_argument(
         "--output-dir", type=pathlib.Path, help="directory of the report files (default: print them to stdout)"
     )
-    group.add_argument("--output-name", default="benchmark_modules", help="base name of the report files")
+    group.add_argument("--output-name", default=output_name, help="base name of the report files")
     args = parser.parse_args(argv)
     try:
         device = wp.get_device(args.device)
@@ -256,12 +265,24 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    specs: tuple[ModuleSpec, ...] = SPECS,
+    output_name: str = "benchmark_modules",
+    no_baseline: bool = False,
+    fail_on_errors: bool = False,
+) -> int:
     """Run the benchmarks and write the reports.
 
     The global settings modified while benchmarking (Warp's log level, PyTorch's TF32 flags) are restored afterwards.
 
     :param argv: The command line arguments (without the program name), or None to use ``sys.argv``.
+
+    :param specs: Modules or networks to benchmark.
+    :param output_name: Report file base name and benchmark entry point name.
+    :param no_baseline: Whether to skip the baseline implementation by default.
+    :param fail_on_errors: Whether errors result in a nonzero exit status, after writing the reports.
 
     :return: The exit status.
     """
@@ -269,16 +290,28 @@ def main(argv: list[str] | None = None) -> int:
     # silence Warp's initialization and module loading messages, which would be mixed with the reports on stdout
     wp.config.log_level = wp.LOG_WARNING
     try:
-        return _main(argv)
+        return _main(argv, specs, output_name, no_baseline, fail_on_errors)
     finally:
         wp.config.log_level, torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = previous
 
 
-def _main(argv: list[str] | None) -> int:
-    args = parse_args(argv)
+def _main(
+    argv: list[str] | None,
+    specs: tuple[ModuleSpec, ...],
+    output_name: str,
+    no_baseline: bool,
+    fail_on_errors: bool,
+) -> int:
+    args = parse_args(
+        argv,
+        prog=f"python -m benchmarks.{output_name}",
+        output_name=output_name,
+        no_baseline=no_baseline,
+        categories=tuple(dict.fromkeys(spec.category for spec in specs)),
+    )
     if REPOSITORY not in pathlib.Path(warp_nn.__file__).resolve().parents:
         _log(f"Warning: the benchmarked warp-nn ({warp_nn.__file__}) is not the one of this repository ({REPOSITORY})")
-    specs = select_specs(SPECS, categories=args.categories, patterns=args.modules)
+    specs = select_specs(specs, categories=args.categories, patterns=args.modules)
     if args.list:
         print("\n".join(f"{spec.category:<12} {spec.name}" for spec in specs))
         return 0
@@ -348,6 +381,7 @@ def _main(argv: list[str] | None) -> int:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
         metadata = collect_metadata(args, date=date, baseline_commit=baseline_commit)
+        metadata["title"] = f"warp-nn {output_name.removeprefix('benchmark_').replace('_', ' ')} benchmark"
     for name in args.format:
         extension, formatter = FORMATS[name]
         report = formatter(results, metadata)
@@ -361,7 +395,7 @@ def _main(argv: list[str] | None) -> int:
         except OSError as e:  # do not lose the results of a long benchmark
             _log(f"Unable to write the report to {path} ({e}), printing it instead")
             print(report)
-    return 0
+    return int(fail_on_errors and any(result.errors for result in results))
 
 
 if __name__ == "__main__":

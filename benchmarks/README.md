@@ -58,15 +58,6 @@ samples and iterations per sample, speedups and their confidence intervals). The
 (color-coded cells, with the absolute times and confidence interval in their tooltips). All the reports start with
 the specifications of the GPU and CPU, since the results depend on both.
 
-### Continuous integration
-
-The `benchmark-modules` job of `.gitlab-ci.yml` benchmarks every merge request pipeline against the `develop` branch
-(`BENCHMARK_BASELINE_REF` variable), and exposes the reports (HTML, Markdown, JSON and CSV) in the merge request
-without blocking the merge: the "Modules benchmark" link (exposed artifact) opens the job artifacts.
-
-The job runs (on a GPU runner) only for merge requests that change the library (`warp_nn`), the benchmarks, the
-project configuration or the CI configuration.
-
 ### Methodology
 
 What is measured:
@@ -134,3 +125,25 @@ Tips:
 - To decide on small differences, increase the sample time and/or the number of samples (e.g.
   `--min-sample-time 0.04 --samples 60`) for the modules of interest. Running with the baseline equal to the
   current implementation (A/A test) shows the noise floor of the machine.
+
+## Newton actuator networks benchmark
+
+`benchmark_newton_networks.py` compares Warp-NN actuator MLP, LSTM and GRU inference with matching Torch checkpoint
+architectures accepted by Newton's `DriveNeuralMLP`, `DriveNeuralLSTM` and `DriveNeuralGRU`. The LSTM follows Newton's
+`_LSTMNet` reference in `newton/tests/test_actuators.py`. Newton itself is not required.
+
+```bash
+python -m benchmarks.benchmark_newton_networks --format markdown html json csv --output-dir benchmark-results
+python benchmarks/benchmark_newton_networks.py --cuda-graph --modules "*LSTM*"
+```
+
+The MLP has three 32-unit ELU hidden layers and one effort output, with either two current features or six
+history-stacked features. These are representative checkpoints rather than fixed Newton defaults; a single-linear
+MLP also matches Newton's `_build_mlp_onnx` fixture. GRU configurations match the four-feature, four-hidden-unit
+`TestDriveNeuralGRU` fixtures and the stacked `GRUCell` evaluation in `DriveNeuralGRU`: one layer with a linear
+head, and two layers with a Tanh head. GRU output scaling belongs to Newton's effort-writing kernel and is excluded.
+The LSTM has one 8-unit layer and a linear effort decoder. Each evaluation processes
+one time step from preallocated zero states. Batch sizes count actuators. Timing excludes feature preparation,
+history updates, joint indexing, effort scaling and checkpoint loading. Only the forward inference pass is measured.
+The same timing, statistics, device selection and report options as the modules benchmark are available;
+a Warp-NN baseline is disabled. Errors produce a nonzero exit status after writing the reports.
