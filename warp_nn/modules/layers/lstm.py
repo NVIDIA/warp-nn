@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
+
 import warp as wp
 
 from warp_nn.initializers import kaiming_uniform
@@ -20,6 +22,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import copy, get_kernel_config, resolve_dim
 
+from ._common import reduction_chunk, tiled_kernel
 from .lstm_cell import _create_kernels
 
 
@@ -153,7 +156,12 @@ class LSTM(Module):
             self._initialize_parameters()
         # runtime variables
         self._config = get_kernel_config()
-        self._kernel = _create_kernels(self._config, include_bias=bias)
+        self._create_kernels = functools.partial(
+            _create_kernels,
+            include_bias=bias,
+            residual_dim=reduction_chunk(self._config, max(self.input_size, self._num_directions * self.hidden_size)),
+        )
+        self._kernels = {}
         self._slices = (
             slice(0 * self.hidden_size, 1 * self.hidden_size),
             slice(1 * self.hidden_size, 2 * self.hidden_size),
@@ -225,7 +233,8 @@ class LSTM(Module):
         # - each time step writes its hidden and cell states to their own slices of the layer output and cell state
         #   arrays (rather than overwriting the same arrays), so that the tape can propagate the gradients through
         #   the sequence
-        dim = resolve_dim(config=self._config, shape=(batch_size, hidden_size), tiled=True)
+        config, kernel = tiled_kernel(self, hidden_size, batch_size)
+        dim = resolve_dim(config=config, shape=(batch_size, hidden_size), tiled=True)
         layer_input = input
         for layer, layer_output in enumerate(outputs):
             for direction in range(num_directions):
@@ -242,12 +251,12 @@ class LSTM(Module):
                 for t in reversed(range(sequence_length)) if direction else range(sequence_length):
                     output, output_cell = layer_output[:, t, features], cells[index, t]
                     wp.launch_tiled(
-                        self._kernel,
+                        kernel,
                         dim=dim,
                         inputs=[layer_input[:, t], state, cell, *weights, *biases],
                         outputs=[output, output_cell],
                         device=self.device,
-                        block_dim=self._config.block_dim,
+                        block_dim=config.block_dim,
                     )
                     state, cell = output, output_cell
                 copy(state, output_hidden[0][index])

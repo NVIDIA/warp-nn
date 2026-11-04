@@ -59,7 +59,11 @@ Guidelines
   with rows of a multiple of 16 bytes; otherwise Warp silently falls back to scalar loads.
 * **Do not oversize tiles for small arrays.** The grid is rounded up, so when an array dimension is smaller than the
   tile dimension, part of the tile is out of bounds and wasted work. A tile that is too large can also produce too
-  few blocks to keep the GPU busy.
+  few blocks to keep the GPU busy. The ``Linear``, ``RNN``, ``GRU`` and ``LSTM`` layers and cells do this
+  themselves: they take the configured 2D tile and ``block_dim`` as an upper bound, narrow the tile to their output
+  features and use fewer rows for batches too small to keep the GPU busy. They create a kernel for each tile they
+  fit, on the first call that needs it, so call them once with the batch size of a CUDA graph before recording it
+  to keep the kernel compilation out of the capture.
 
 .. note::
 

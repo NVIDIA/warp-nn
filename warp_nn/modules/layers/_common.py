@@ -13,7 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
+import operator
+
 import warp as wp
+
+from warp_nn.utils import KernelConfig
 
 
 def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...]:
@@ -24,6 +29,58 @@ def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...
     elif isinstance(value, int):
         return (value,) * length
     raise TypeError(f"Expected a tuple or int, got {type(value)}")
+
+
+_MIN_TILE_COLUMNS = 8
+_MIN_TILE_ROWS = 16
+
+
+def fit_tile_2d(config: KernelConfig, features: int, batch_size: int, num_sms: int) -> KernelConfig:
+    """Fit the 2D tile (and block dimension) to a layer's output features and batch size.
+
+    The tile columns cover the output features, so a tile wider than them only computes out-of-bounds columns
+    (e.g. a (16, 64) tile over 8 features wastes 7/8 of the work): the tile width is halved while it still covers the
+    features (down to 8 columns) and its rows doubled, keeping its number of elements. The operand tiles of the matrix
+    multiplications take shared memory in proportion to the tile's rows plus columns, so the tile is not narrowed
+    beyond the configured tile's sum. Then, while the batch is too small to give every SM two blocks, the rows are
+    halved (down to 16), and the block dimension is limited to the number of tile elements. A non-positive block
+    dimension (the hardware maximum) is kept.
+    """
+    rows, columns = config.tile_2d
+    while columns % 2 == 0 and columns // 2 >= max(features, _MIN_TILE_COLUMNS):
+        columns //= 2
+        if rows * 2 + columns <= sum(config.tile_2d):
+            rows *= 2
+    small_batch = False
+    while rows % 2 == 0 and rows // 2 >= _MIN_TILE_ROWS and -(-batch_size // rows) < 2 * num_sms:
+        rows //= 2
+        small_batch = True
+    block_dim = config.block_dim
+    if block_dim > 0:
+        if small_batch:
+            block_dim = min(block_dim, rows * columns)
+        else:
+            elements_per_thread = max(1, config.tile_2d[0] * config.tile_2d[1] // block_dim)
+            block_dim = min(block_dim, max(32, rows * columns // elements_per_thread))
+    return dataclasses.replace(config, tile_2d=(rows, columns), block_dim=block_dim)
+
+
+def tiled_kernel(module, features: int, batch_size: int):
+    """Return the configuration and kernel of a tiled layer for a batch size (created once per fitted tile)."""
+    config = fit_tile_2d(module._config, features, batch_size, wp.get_device(module.device).sm_count)
+    key = (config.tile_2d, config.block_dim)
+    if key not in module._kernels:
+        module._kernels[key] = module._create_kernels(config)
+    return config, module._kernels[key]
+
+
+def reduction_chunk(config: KernelConfig, size: int) -> int:
+    """Return the reduction (K) chunk of a tiled layer's matrix multiplications for a reduction size.
+
+    It is the configured tile's chunk (its width, up to :data:`_MAX_RESIDUAL_DIM`), independent of the fitted tile,
+    or a smaller power of two (down to 8) that still covers a small reduction size, which would be zero-padded.
+    """
+    return min(config.tile_2d[1], _MAX_RESIDUAL_DIM, max(8, 1 << (operator.index(size) - 1).bit_length()))
 
 
 # Warp functions

@@ -126,6 +126,20 @@ Tips:
   `--min-sample-time 0.04 --samples 60`) for the modules of interest. Running with the baseline equal to the
   current implementation (A/A test) shows the noise floor of the machine.
 
+## Narrow layers benchmark
+
+`benchmark_narrow_layers.py` benchmarks the layers whose 2D tile is fitted to their output features (`Linear`,
+`RNN`, `GRU`, `LSTM` and their cells) at output widths from 1 to 64, which the modules benchmark (256 features) does
+not cover, with the same options, batch sizes and reports.
+
+```bash
+python -m benchmarks.benchmark_narrow_layers --cuda-graph --format markdown html json csv --output-dir benchmark-results
+python benchmarks/benchmark_narrow_layers.py --modules "Linear*" --batch-sizes 1 4096
+```
+
+`Linear` uses 16 and 256 input features (the reduction size), the multi-layer recurrent layers use 2 input features
+and 4 time steps (as Newton's actuator networks), and the cells use 64 input features.
+
 ## Newton actuator networks benchmark
 
 `benchmark_newton_networks.py` compares Warp-NN actuator MLP, LSTM and GRU inference with matching Torch checkpoint

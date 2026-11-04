@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
+
 import warp as wp
 
 from warp_nn.initializers import kaiming_uniform
@@ -20,10 +22,10 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
 
-from ._common import tile_transposed_dual_gemm_2d
+from ._common import reduction_chunk, tile_transposed_dual_gemm_2d, tiled_kernel
 
 
-def _create_kernels(config: KernelConfig, *, include_bias: bool):
+def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: int | None = None):
 
     @wp.func
     def sigmoid(x: float):
@@ -70,7 +72,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
         t_cell = wp.tile_transpose(wp.tile_load(cell, shape=shape, offset=offset))
         # each gate accumulates its input-to-hidden and hidden-to-hidden products in a single tile
-        tile_transposed_dual_gemm_2d_fn = wp.static(tile_transposed_dual_gemm_2d(config.tile_2d))
+        tile_transposed_dual_gemm_2d_fn = wp.static(tile_transposed_dual_gemm_2d(config.tile_2d, residual_dim))
         gate_i = tile_transposed_dual_gemm_2d_fn(weight_ii, input, weight_hi, hidden, index=(i, j))
         gate_f = tile_transposed_dual_gemm_2d_fn(weight_if, input, weight_hf, hidden, index=(i, j))
         gate_g = tile_transposed_dual_gemm_2d_fn(weight_ig, input, weight_hg, hidden, index=(i, j))
@@ -217,7 +219,12 @@ class LSTMCell(Module):
             self._initialize_parameters()
         # runtime variables
         self._config = get_kernel_config()
-        self._kernel = _create_kernels(self._config, include_bias=self.bias_ih is not None)
+        self._create_kernels = functools.partial(
+            _create_kernels,
+            include_bias=self.bias_ih is not None,
+            residual_dim=reduction_chunk(self._config, max(self.input_size, self.hidden_size)),
+        )
+        self._kernels = {}
         self._slices = (
             slice(0 * self.hidden_size, 1 * self.hidden_size),
             slice(1 * self.hidden_size, 2 * self.hidden_size),
@@ -251,9 +258,10 @@ class LSTMCell(Module):
             )
         output = self._cache[key]
         # launch kernel
+        config, kernel = tiled_kernel(self, self.hidden_size, input.shape[0])
         wp.launch_tiled(
-            self._kernel,
-            dim=resolve_dim(config=self._config, shape=shape, tiled=True),
+            kernel,
+            dim=resolve_dim(config=config, shape=shape, tiled=True),
             inputs=[
                 input,
                 hidden[0],
@@ -277,6 +285,6 @@ class LSTMCell(Module):
             ],
             outputs=[output[0], output[1]],
             device=self.device,
-            block_dim=self._config.block_dim,
+            block_dim=config.block_dim,
         )
         return output

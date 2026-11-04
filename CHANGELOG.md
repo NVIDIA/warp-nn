@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+### Changed
+- Fit the 2D tile and block dimension of the `Linear`, `RNN`, `GRU` and `LSTM` layers and cells to their output
+  features and batch size, within the configured tile, which speeds up layers narrower than the tile (e.g. an
+  8-unit `LSTM`) and small batches
+
 ## [0.4.1] - 2026-10-18
 ### Changed
 - Update default kernel configuration for tiles of 1024 elements
