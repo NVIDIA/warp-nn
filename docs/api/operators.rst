@@ -18,6 +18,7 @@ Operators
     BitwiseXor <operators/bitwise_xor>
     Ceil <operators/ceil>
     Clip <operators/clip>
+    Concatenate <operators/concatenate>
     Cos <operators/cos>
     Cosh <operators/cosh>
     Div <operators/div>
@@ -40,7 +41,7 @@ Operators
     Tan <operators/tan>
     Tanh <operators/tanh>
 
-Operators are element-wise mathematical operations.
+Operators are element-wise mathematical operations and array operations.
 
 The following table lists the available operators:
 
@@ -62,6 +63,7 @@ The following table lists the available operators:
     BitwiseXor
     Ceil
     Clip
+    Concatenate
     Cos
     Cosh
     Div

@@ -256,59 +256,6 @@ class _SliceOperation(_Operation):
 
 
 @dataclass(eq=False, kw_only=True)
-class _ConcatOperation(_Operation):
-    """Concatenate runtime arrays along an axis into a cached output array.
-
-    Each input is copied into its slice of the output by a kernel recorded on the active tape (if any), so the
-    gradients of the output are propagated to the inputs.
-    """
-
-    node: _Node
-    inputs: tuple[str, ...]
-    axis: int
-    requires_grad: bool
-    _cache: dict[tuple[tuple[int, ...], type], wp.array] = field(default_factory=dict, init=False, repr=False)
-
-    @property
-    def modules(self) -> tuple[nn.Module, ...]:
-        return ()
-
-    def __call__(self, tensors: dict[str, wp.array]) -> None:
-        arrays = tuple(tensors[name] for name in self.inputs)
-        shapes = tuple(tuple(array.shape) for array in arrays)
-        ndim = len(shapes[0])
-        if not -ndim <= self.axis < ndim:
-            raise ValueError(f"OnnxRuntime Concat: axis {self.axis} is out of range for input shapes {shapes}")
-        axis = self.axis % ndim
-        if any(
-            len(shape) != ndim or shape[:axis] + shape[axis + 1 :] != shapes[0][:axis] + shapes[0][axis + 1 :]
-            for shape in shapes
-        ):
-            raise ValueError(f"OnnxRuntime Concat: input shapes {shapes} differ outside axis {axis}")
-        dtypes = {array.dtype for array in arrays}
-        if len(dtypes) > 1:
-            names = ", ".join(sorted(dtype.__name__ for dtype in dtypes))
-            raise NotImplementedError(f"OnnxRuntime Concat: inputs with different dtypes ({names}) are not supported")
-        (dtype,) = dtypes
-        output_shape = shapes[0][:axis] + (sum(shape[axis] for shape in shapes),) + shapes[0][axis + 1 :]
-        key = (output_shape, dtype)
-        if key not in self._cache:
-            self._cache[key] = wp.empty(
-                output_shape, dtype=dtype, device=arrays[0].device, requires_grad=self.requires_grad
-            )
-        output = self._cache[key]
-        offset = 0
-        for array in arrays:
-            if array.size == 0:  # an empty slice of the output cannot be indexed
-                continue
-            index = [slice(None)] * ndim
-            index[axis] = slice(offset, offset + array.shape[axis])
-            copy(array, output[tuple(index)])
-            offset += array.shape[axis]
-        tensors[self.node.outputs[0]] = output
-
-
-@dataclass(eq=False, kw_only=True)
 class _ElementwiseOperation(_Operation):
     """Call element-wise modules with multidirectional (NumPy-style) broadcasting of their operands.
 
@@ -976,13 +923,40 @@ def _compile_slice(node: _Node, context: CompilationContext) -> _Operation:
 
 
 def _compile_concat(node: _Node, context: CompilationContext) -> _Operation:
-    """Compile an ONNX ``Concat`` node into copies of its inputs into a cached output array.
+    """Compile an ONNX ``Concat`` node into a :class:`Concatenate` module.
 
-    The ``axis`` attribute is required, except before opset 4, where it defaults to 1.
+    The ``axis`` attribute is required, except before opset 4, where it defaults to 1. Since the runtime arrays are
+    contiguous, the inputs (of any number of dimensions) are concatenated along their last dimension as 2D views
+    with shape ``(prod(shape[:axis]), prod(shape[axis:]))``, or as 1D views if there is a single row
+    (e.g. if ``axis`` is 0).
     """
-    axis = _attributes(node, axis=1 if context.opset < 4 else None)["axis"]
+    axis = int(_attributes(node, axis=1 if context.opset < 4 else None)["axis"])
+    module = nn.Concatenate(dim=-1, requires_grad=context.requires_grad)
+
+    def forward(*inputs: wp.array) -> wp.array:
+        shapes = tuple(tuple(input.shape) for input in inputs)
+        ndim = len(shapes[0])
+        if not -ndim <= axis < ndim:
+            raise ValueError(f"OnnxRuntime Concat: axis {axis} is out of range for input shapes {shapes}")
+        dim = axis % ndim
+        if any(
+            len(shape) != ndim or shape[:dim] + shape[dim + 1 :] != shapes[0][:dim] + shapes[0][dim + 1 :]
+            for shape in shapes
+        ):
+            raise ValueError(f"OnnxRuntime Concat: input shapes {shapes} differ outside axis {dim}")
+        dtypes = {input.dtype for input in inputs}
+        if len(dtypes) > 1:
+            names = ", ".join(sorted(dtype.__name__ for dtype in dtypes))
+            raise NotImplementedError(f"OnnxRuntime Concat: inputs with different dtypes ({names}) are not supported")
+        rows = math.prod(shapes[0][:dim])
+        views = tuple(
+            input.reshape((math.prod(shape),) if rows == 1 else (rows, math.prod(shape[dim:])))
+            for input, shape in zip(inputs, shapes)
+        )
+        return module(*views).reshape(shapes[0][:dim] + (sum(shape[dim] for shape in shapes),) + shapes[0][dim + 1 :])
+
     inputs = tuple(context.tensor(node, index) for index in range(len(node.inputs)))
-    return _ConcatOperation(node=node, inputs=inputs, axis=int(axis), requires_grad=context.requires_grad)
+    return _ModuleOperation(node=node, module=module, inputs=inputs, forward=forward)
 
 
 COMPILERS: dict[str, _Compiler] = {

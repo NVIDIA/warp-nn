@@ -242,31 +242,58 @@ _CASES = {
     "Slice_opset9": _Case(
         "Slice", (), {"x": _uniform((3, 4))}, attributes={"starts": [1], "ends": [-1], "axes": [1]}, opset=9
     ),
-    # copied into cached outputs, without modules
-    "Concat": _Case("Concat", (), {"a": _uniform((2, 3)), "b": _uniform((2, 1))}, attributes={"axis": 1}),
+    # combining operators
+    "Concat": _Case(
+        "Concat", (operators.Concatenate,), {"a": _uniform((2, 3)), "b": _uniform((2, 1))}, attributes={"axis": 1}
+    ),
     "Concat_three_inputs": _Case(
         "Concat",
-        (),
+        (operators.Concatenate,),
         {"a": _uniform((1, 2, 3)), "b": _uniform((2, 2, 3)), "c": _uniform((1, 2, 3))},
         attributes={"axis": 0},
     ),
     "Concat_empty_input": _Case(
-        "Concat", (), {"a": _uniform((2, 3)), "b": _uniform((1, 3)), "c": _uniform((0, 3))}, attributes={"axis": 0}
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3)), "b": _uniform((1, 3)), "c": _uniform((0, 3))},
+        attributes={"axis": 0},
     ),
     "Concat_empty_outside_axis": _Case(
-        "Concat", (), {"a": _uniform((0, 3)), "b": _uniform((0, 2))}, attributes={"axis": 1}
+        "Concat", (operators.Concatenate,), {"a": _uniform((0, 3)), "b": _uniform((0, 2))}, attributes={"axis": 1}
     ),
     "Concat_opset3_default_axis": _Case(
         "Concat",
-        (),
+        (operators.Concatenate,),
         {"a": _uniform((2, 3)), "b": _uniform((2, 1))},
         opset=3,
         reference=lambda a, b: np.concatenate([a, b], axis=1),  # the ONNX reference implementation requires the axis
         output_shapes=((2, 4),),
     ),
     "Concat_negative_axis": _Case(
-        "Concat", (), {"a": _uniform((2, 3, 1)), "b": _uniform((2, 3, 2))}, attributes={"axis": -1}
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 1)), "b": _uniform((2, 3, 2))},
+        attributes={"axis": -1},
     ),
+    "Concat_4d": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 4, 5)), "b": _uniform((2, 1, 4, 5))},
+        attributes={"axis": 1},
+    ),
+    "Concat_4d_last_axis": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 4, 5)), "b": _uniform((2, 3, 4, 2))},
+        attributes={"axis": 3},
+    ),
+    "Concat_integers": _Case(
+        "Concat", (operators.Concatenate,), {"a": _integers((2, 3)), "b": _integers((2, 2))}, attributes={"axis": 1}
+    ),
+    "Concat_integers_first_axis": _Case(
+        "Concat", (operators.Concatenate,), {"a": _integers((2, 3)), "b": _integers((1, 3))}, attributes={"axis": 0}
+    ),
+    "Concat_single_input": _Case("Concat", (operators.Concatenate,), {"a": _uniform((2, 3))}, attributes={"axis": 0}),
     "Squeeze": _Case("Squeeze", (), {"x": _uniform((2, 1, 3, 1))}, {"axes": np.array([1, -1], np.int64)}),
     "Squeeze_all": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}),
     "Squeeze_opset11": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}, attributes={"axes": [0]}, opset=11),
