@@ -242,6 +242,11 @@ _CASES = {
     "Slice_opset9": _Case(
         "Slice", (), {"x": _uniform((3, 4))}, attributes={"starts": [1], "ends": [-1], "axes": [1]}, opset=9
     ),
+    "Squeeze": _Case("Squeeze", (), {"x": _uniform((2, 1, 3, 1))}, {"axes": np.array([1, -1], np.int64)}),
+    "Squeeze_all": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}),
+    "Squeeze_opset11": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}, attributes={"axes": [0]}, opset=11),
+    "Tan": _unary("Tan", operators.Tan, x=_uniform((2, 3, 4), -1.0, 1.0)),
+    "Tanh": _unary("Tanh", operators.Tanh),
     # combining operators
     "Concat": _Case(
         "Concat", (operators.Concatenate,), {"a": _uniform((2, 3)), "b": _uniform((2, 1))}, attributes={"axis": 1}
@@ -294,11 +299,6 @@ _CASES = {
         "Concat", (operators.Concatenate,), {"a": _integers((2, 3)), "b": _integers((1, 3))}, attributes={"axis": 0}
     ),
     "Concat_single_input": _Case("Concat", (operators.Concatenate,), {"a": _uniform((2, 3))}, attributes={"axis": 0}),
-    "Squeeze": _Case("Squeeze", (), {"x": _uniform((2, 1, 3, 1))}, {"axes": np.array([1, -1], np.int64)}),
-    "Squeeze_all": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}),
-    "Squeeze_opset11": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}, attributes={"axes": [0]}, opset=11),
-    "Tan": _unary("Tan", operators.Tan, x=_uniform((2, 3, 4), -1.0, 1.0)),
-    "Tanh": _unary("Tanh", operators.Tanh),
     # binary operators
     "Add": _binary("Add", operators.Add),
     "Add_broadcast": _binary("Add", operators.Add, b=_uniform((3, 1))),
