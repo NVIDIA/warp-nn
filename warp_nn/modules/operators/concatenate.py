@@ -19,7 +19,7 @@ import warp as wp
 
 from warp_nn.modules._common import INT_DTYPES, create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import get_kernel_config, resolve_dim
+from warp_nn.utils import resolve_dim
 
 
 def _create_function():
@@ -50,11 +50,10 @@ class Concatenate(Module):
         super().__init__(requires_grad=requires_grad)
         self._dim = int(dim)
         # runtime variables
-        self._config = get_kernel_config()
         # the integer kernels are created separately, since they are not differentiable
         function = _create_function()
-        self._kernels = create_unary_kernels(config=self._config, function=function)
-        self._kernels |= create_unary_kernels(config=self._config, function=function, dtypes=INT_DTYPES)
+        self._kernels = create_unary_kernels(config=self.config, function=function)
+        self._kernels |= create_unary_kernels(config=self.config, function=function, dtypes=INT_DTYPES)
 
     @property
     def dim(self) -> int:
@@ -111,11 +110,11 @@ class Concatenate(Module):
                 index[dim] = slice(offset, offset + size)
                 wp.launch_tiled(
                     kernel,
-                    dim=resolve_dim(config=self._config, shape=input_shape, tiled=True),
+                    dim=resolve_dim(config=self.config, shape=input_shape, tiled=True),
                     inputs=[input],
                     outputs=[output[tuple(index)]],
                     device=self.device,
-                    block_dim=self._config.block_dim,
+                    block_dim=self.config.block_dim,
                 )
             offset += size
         return output

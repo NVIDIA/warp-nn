@@ -25,7 +25,7 @@ import warp as wp
 
 from warp_nn.modules.buffer import Buffer
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import parse_device
+from warp_nn.utils import KernelConfig, get_kernel_config, parse_device
 
 
 class Module(ABC):
@@ -46,6 +46,8 @@ class Module(ABC):
         :param kwargs: Additional keyword arguments.
         """
         self._requires_grad: bool = requires_grad
+        if not hasattr(self, "_config"):
+            self._config: KernelConfig = get_kernel_config()
         if not hasattr(self, "_device"):
             self._device: wp.Device = parse_device(None)
         if not hasattr(self, "_cache"):
@@ -82,6 +84,14 @@ class Module(ABC):
         :raises NotImplementedError: If the module subclass does not implement the method.
         """
         raise NotImplementedError(f"Module '{type(self).__name__}' is missing the required the .__call__(...) method")
+
+    @property
+    def config(self) -> KernelConfig:
+        """Kernel configuration with which the module was created.
+
+        It is read when the module is created (see :py:func:`~warp_nn.utils.kernel_config`).
+        """
+        return self._config
 
     @property
     def device(self) -> wp.Device:

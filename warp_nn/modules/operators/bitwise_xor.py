@@ -19,7 +19,7 @@ import warp as wp
 
 from warp_nn.modules._common import INT_DTYPES, create_binary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import get_kernel_config, resolve_dim
+from warp_nn.utils import resolve_dim
 
 
 def _create_function():
@@ -44,8 +44,7 @@ class BitwiseXor(Module):
         """
         super().__init__(requires_grad=False)
         # runtime variables
-        self._config = get_kernel_config()
-        self._kernels = create_binary_kernels(config=self._config, function=_create_function(), dtypes=INT_DTYPES)
+        self._kernels = create_binary_kernels(config=self.config, function=_create_function(), dtypes=INT_DTYPES)
 
     def __call__(self, a: wp.array, b: wp.array) -> wp.array:
         """Forward pass of the operation.
@@ -76,11 +75,11 @@ class BitwiseXor(Module):
         # launch kernel
         wp.launch_tiled(
             kernel,
-            dim=resolve_dim(config=self._config, shape=shape, tiled=True),
+            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
             inputs=[a, b],
             outputs=[output],
             device=self.device,
-            block_dim=self._config.block_dim,
+            block_dim=self.config.block_dim,
             record_tape=False,
         )
         return output

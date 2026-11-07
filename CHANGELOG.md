@@ -4,6 +4,7 @@
 ### Added
 - Add `Concatenate` operator, to concatenate arrays along an existing dimension
 - Add `Slice` and `Concat` support to the ONNX inference runtime
+- Add the `config` property to modules, to get the kernel configuration with which the module was created
 
 ## [0.4.1] - 2026-10-18
 ### Changed

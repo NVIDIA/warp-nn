@@ -18,7 +18,7 @@ import warp as wp
 from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
+from warp_nn.utils import KernelConfig, resolve_dim
 
 from ._common import expand_tuple
 
@@ -171,9 +171,8 @@ class Conv2D(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._config = get_kernel_config()
         self._kernel = _create_kernels(
-            self._config,
+            self.config,
             include_bias=bias,
             kernel_sizes=self.kernel_size,
             strides=self.stride,
@@ -231,10 +230,10 @@ class Conv2D(Module):
         # launch kernel
         wp.launch(
             self._kernel,
-            dim=resolve_dim(config=self._config, shape=shape, tiled=False),
+            dim=resolve_dim(config=self.config, shape=shape, tiled=False),
             inputs=[input, self.weight.data, self.bias.data if self.bias else None],
             outputs=[output],
             device=self.device,
-            block_dim=self._config.block_dim,
+            block_dim=self.config.block_dim,
         )
         return output

@@ -18,7 +18,7 @@ import warp as wp
 from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import copy, get_kernel_config, resolve_dim
+from warp_nn.utils import copy, resolve_dim
 
 from .gru_cell import _create_kernels
 
@@ -142,8 +142,7 @@ class GRU(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._config = get_kernel_config()
-        self._kernel = _create_kernels(self._config, include_bias=bias)
+        self._kernel = _create_kernels(self.config, include_bias=bias)
         self._slices = (
             slice(0 * self.hidden_size, 1 * self.hidden_size),
             slice(1 * self.hidden_size, 2 * self.hidden_size),
@@ -196,7 +195,7 @@ class GRU(Module):
         # launch kernels, one per layer, direction and time step
         # - each time step writes its hidden state to its own slice of the layer output array (rather than
         #   overwriting the same array), so that the tape can propagate the gradients through the sequence
-        dim = resolve_dim(config=self._config, shape=(batch_size, hidden_size), tiled=True)
+        dim = resolve_dim(config=self.config, shape=(batch_size, hidden_size), tiled=True)
         layer_input = input
         for layer, layer_output in enumerate(outputs):
             for direction in range(num_directions):
@@ -218,7 +217,7 @@ class GRU(Module):
                         inputs=[layer_input[:, t], state, *weights, *biases],
                         outputs=[output],
                         device=self.device,
-                        block_dim=self._config.block_dim,
+                        block_dim=self.config.block_dim,
                     )
                     state = output
                 copy(state, output_hidden[index])

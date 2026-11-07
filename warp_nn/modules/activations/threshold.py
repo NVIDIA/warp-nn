@@ -19,7 +19,7 @@ import warp as wp
 
 from warp_nn.modules._common import create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import get_kernel_config, resolve_dim
+from warp_nn.utils import resolve_dim
 
 
 def _create_function(*, threshold: float, value: float):
@@ -55,9 +55,8 @@ class Threshold(Module):
         self._threshold = float(threshold)
         self._value = float(value)
         # runtime variables
-        self._config = get_kernel_config()
         self._kernels = create_unary_kernels(
-            config=self._config, function=_create_function(threshold=self._threshold, value=self._value)
+            config=self.config, function=_create_function(threshold=self._threshold, value=self._value)
         )
 
     @property
@@ -90,10 +89,10 @@ class Threshold(Module):
         # launch kernel
         wp.launch_tiled(
             kernel,
-            dim=resolve_dim(config=self._config, shape=shape, tiled=True),
+            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
             inputs=[input],
             outputs=[output],
             device=self.device,
-            block_dim=self._config.block_dim,
+            block_dim=self.config.block_dim,
         )
         return output

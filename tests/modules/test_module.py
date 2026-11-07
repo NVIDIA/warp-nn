@@ -21,6 +21,7 @@ import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
+from warp_nn.utils import get_kernel_config, kernel_config
 
 from .. import utilities
 
@@ -181,6 +182,20 @@ def test_state_dict(capsys, device, modules: list[nn.Module]):
             "buffer_e1",
         ]
     )
+
+
+def test_config(capsys):
+    # the default config is used outside of any context
+    assert ModuleA().config == get_kernel_config()
+    assert nn.ReLU().config == get_kernel_config()
+    # the config is read at creation time, and is not affected by later contexts
+    with kernel_config(block_dim=64, tile_1d=(128,)):
+        module = nn.Sequential(nn.Linear(4, 3), nn.ReLU())
+    with kernel_config(block_dim=32):
+        for m in [module, *module.modules()]:
+            assert m.config.block_dim == 64
+            assert m.config.tile_1d == (128,)
+            assert m.config.tile_2d == get_kernel_config().tile_2d
 
 
 def test_train_eval(capsys):

@@ -18,7 +18,7 @@ import warp as wp
 from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import KernelConfig, get_kernel_config, resolve_dim
+from warp_nn.utils import KernelConfig, resolve_dim
 
 from ._common import tile_transposed_gemm_2d
 
@@ -119,8 +119,7 @@ class Linear(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._config = get_kernel_config()
-        self._kernel = _create_kernels(self._config, include_bias=self.bias is not None)
+        self._kernel = _create_kernels(self.config, include_bias=self.bias is not None)
 
     def _initialize_parameters(self):
         kaiming_uniform(self.weight.data, mode="scale", scale=1.0 / self.in_features)
@@ -144,11 +143,11 @@ class Linear(Module):
         # launch kernel
         wp.launch_tiled(
             self._kernel,
-            dim=resolve_dim(config=self._config, shape=shape, tiled=True),
+            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
             inputs=[input, self.weight.data, self.bias.data if self.bias else None],
             outputs=[output],
             device=self.device,
-            block_dim=self._config.block_dim,
+            block_dim=self.config.block_dim,
         )
         return output
 
