@@ -77,6 +77,7 @@ from warp_nn.modules.operators import (
     BitwiseXor,
     Ceil,
     Clip,
+    Concatenate,
     Cos,
     Cosh,
     Div,

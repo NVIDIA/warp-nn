@@ -163,6 +163,10 @@ def _torch_clip(x: torch.Tensor) -> torch.Tensor:
     return torch.clamp(x, -0.5, 0.5)
 
 
+def _torch_concatenate(*inputs: torch.Tensor) -> torch.Tensor:
+    return torch.cat(inputs, dim=-1)
+
+
 def _warp_mlp(nn: ModuleType) -> Any:
     return nn.Sequential(
         nn.Linear(OBSERVATIONS, 512),
@@ -304,6 +308,7 @@ SPECS: tuple[ModuleSpec, ...] = (
     _bitwise("BitwiseXor", torch.bitwise_xor, 2),
     _operator("Ceil", torch.ceil),
     _operator("Clip", _torch_clip, min_val=-0.5, max_val=0.5),
+    _operator("Concatenate", _torch_concatenate, _VECTOR, _VECTOR, dim=-1),
     _operator("Cos", torch.cos),
     _operator("Cosh", torch.cosh),
     _operator("Div", torch.div, _VECTOR, InputSpec((FEATURES,), low=0.5, high=2.0)),

@@ -27,6 +27,7 @@ from warp_nn.modules.operators.bitwise_or import BitwiseOr
 from warp_nn.modules.operators.bitwise_xor import BitwiseXor
 from warp_nn.modules.operators.ceil import Ceil
 from warp_nn.modules.operators.clip import Clip
+from warp_nn.modules.operators.concatenate import Concatenate
 from warp_nn.modules.operators.cos import Cos
 from warp_nn.modules.operators.cosh import Cosh
 from warp_nn.modules.operators.div import Div

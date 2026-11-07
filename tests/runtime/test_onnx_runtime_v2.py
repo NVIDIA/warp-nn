@@ -214,12 +214,91 @@ _CASES = {
     "Sin": _unary("Sin", operators.Sin),
     "Sinh": _unary("Sinh", operators.Sinh),
     "Sqrt": _unary("Sqrt", operators.Sqrt, x=_uniform((2, 3, 4), 0.5, 3.0)),
-    # shape operators (executed as views, without modules)
+    # shape operators (executed as views, or copies of non-contiguous views, without modules)
+    "Slice": _Case(
+        "Slice",
+        (),
+        {"x": _uniform((2, 5, 4))},
+        {
+            "starts": np.array([1, -4], np.int64),
+            "ends": np.array([2, 100], np.int64),
+            "axes": np.array([0, 1], np.int64),
+        },
+    ),
+    "Slice_steps": _Case(
+        "Slice",
+        (),
+        {"x": _uniform((6, 4))},
+        {
+            "starts": np.array([-100, 1], np.int64),
+            "ends": np.array([6, 4], np.int64),
+            "axes": np.array([0, -1], np.int64),
+            "steps": np.array([2, 2], np.int64),
+        },
+    ),
+    "Slice_default_axes": _Case(
+        "Slice", (), {"x": _uniform((3, 4))}, {"starts": np.array([1], np.int64), "ends": np.array([3], np.int64)}
+    ),
+    "Slice_opset9": _Case(
+        "Slice", (), {"x": _uniform((3, 4))}, attributes={"starts": [1], "ends": [-1], "axes": [1]}, opset=9
+    ),
     "Squeeze": _Case("Squeeze", (), {"x": _uniform((2, 1, 3, 1))}, {"axes": np.array([1, -1], np.int64)}),
     "Squeeze_all": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}),
     "Squeeze_opset11": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}, attributes={"axes": [0]}, opset=11),
     "Tan": _unary("Tan", operators.Tan, x=_uniform((2, 3, 4), -1.0, 1.0)),
     "Tanh": _unary("Tanh", operators.Tanh),
+    # combining operators
+    "Concat": _Case(
+        "Concat", (operators.Concatenate,), {"a": _uniform((2, 3)), "b": _uniform((2, 1))}, attributes={"axis": 1}
+    ),
+    "Concat_three_inputs": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((1, 2, 3)), "b": _uniform((2, 2, 3)), "c": _uniform((1, 2, 3))},
+        attributes={"axis": 0},
+    ),
+    "Concat_empty_input": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3)), "b": _uniform((1, 3)), "c": _uniform((0, 3))},
+        attributes={"axis": 0},
+    ),
+    "Concat_empty_outside_axis": _Case(
+        "Concat", (operators.Concatenate,), {"a": _uniform((0, 3)), "b": _uniform((0, 2))}, attributes={"axis": 1}
+    ),
+    "Concat_opset3_default_axis": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3)), "b": _uniform((2, 1))},
+        opset=3,
+        reference=lambda a, b: np.concatenate([a, b], axis=1),  # the ONNX reference implementation requires the axis
+        output_shapes=((2, 4),),
+    ),
+    "Concat_negative_axis": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 1)), "b": _uniform((2, 3, 2))},
+        attributes={"axis": -1},
+    ),
+    "Concat_4d": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 4, 5)), "b": _uniform((2, 1, 4, 5))},
+        attributes={"axis": 1},
+    ),
+    "Concat_4d_last_axis": _Case(
+        "Concat",
+        (operators.Concatenate,),
+        {"a": _uniform((2, 3, 4, 5)), "b": _uniform((2, 3, 4, 2))},
+        attributes={"axis": 3},
+    ),
+    "Concat_integers": _Case(
+        "Concat", (operators.Concatenate,), {"a": _integers((2, 3)), "b": _integers((2, 2))}, attributes={"axis": 1}
+    ),
+    "Concat_integers_first_axis": _Case(
+        "Concat", (operators.Concatenate,), {"a": _integers((2, 3)), "b": _integers((1, 3))}, attributes={"axis": 0}
+    ),
+    "Concat_single_input": _Case("Concat", (operators.Concatenate,), {"a": _uniform((2, 3))}, attributes={"axis": 0}),
     # binary operators
     "Add": _binary("Add", operators.Add),
     "Add_broadcast": _binary("Add", operators.Add, b=_uniform((3, 1))),
@@ -722,6 +801,170 @@ def test_recurrent_sequence_lengths(tmp_path, device):
             np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)
 
 
+def _stacked_lstm_model(batch=5, num_layers=2, input_size=2, hidden_size=3):
+    """A multi-layer LSTM with the graph that PyTorch exports: the stacked initial states are split per layer with
+    ``Slice``, and the final states of the layers are joined with ``Concat``."""
+    inputs = {
+        "x": _uniform((1, batch, input_size), -1.0, 1.0),
+        "h0": _uniform((num_layers, batch, hidden_size), -1.0, 1.0),
+        "c0": _uniform((num_layers, batch, hidden_size), -1.0, 1.0),
+    }
+    constants = {"axes": np.array([0], np.int64), "direction_axis": np.array([1], np.int64)}
+    nodes, layer_input = [], "x"
+    for layer in range(num_layers):
+        weights = _recurrent_constants(4, 1, input_size if layer == 0 else hidden_size, hidden_size)
+        constants |= {f"{name}{layer}": value for name, value in weights.items()}
+        constants |= {f"starts{layer}": np.array([layer], np.int64), f"ends{layer}": np.array([layer + 1], np.int64)}
+        bounds = [f"starts{layer}", f"ends{layer}", "axes"]
+        output = "y" if layer == num_layers - 1 else f"sequence{layer}"
+        nodes += [
+            helper.make_node("Slice", ["h0", *bounds], [f"h0_{layer}"]),
+            helper.make_node("Slice", ["c0", *bounds], [f"c0_{layer}"]),
+            helper.make_node(
+                "LSTM",
+                [layer_input, f"W{layer}", f"R{layer}", f"B{layer}", "", f"h0_{layer}", f"c0_{layer}"],
+                [f"y{layer}", f"h_n{layer}", f"c_n{layer}"],
+                hidden_size=hidden_size,
+            ),
+            helper.make_node("Squeeze", [f"y{layer}", "direction_axis"], [output]),
+        ]
+        layer_input = output
+    nodes += [
+        helper.make_node("Concat", [f"h_n{layer}" for layer in range(num_layers)], ["h_n"], axis=0),
+        helper.make_node("Concat", [f"c_n{layer}" for layer in range(num_layers)], ["c_n"], axis=0),
+    ]
+    outputs = {"y": np.float32, "h_n": np.float32, "c_n": np.float32}
+    # explicit output shapes, since the ONNX reference LSTM of some supported onnx versions does not return Y_c
+    shapes = ((1, batch, hidden_size), (num_layers, batch, hidden_size), (num_layers, batch, hidden_size))
+    return _make_model(nodes, inputs, outputs, constants, output_shapes=shapes), inputs, constants
+
+
+def _stacked_lstm_reference(torch, constants, num_layers=2, input_size=2, hidden_size=3):
+    """The PyTorch multi-layer LSTM with the weights of :func:`_stacked_lstm_model`."""
+    order = _TORCH_GATE_ORDER["LSTM"]
+
+    def reorder(value):
+        return np.concatenate([value[i * hidden_size : (i + 1) * hidden_size] for i in order])
+
+    module = torch.nn.LSTM(input_size, hidden_size, num_layers=num_layers).double()
+    with torch.no_grad():
+        for layer in range(num_layers):
+            bias_ih, bias_hh = np.split(constants[f"B{layer}"][0], 2)
+            values = {
+                f"weight_ih_l{layer}": reorder(constants[f"W{layer}"][0]),
+                f"weight_hh_l{layer}": reorder(constants[f"R{layer}"][0]),
+                f"bias_ih_l{layer}": reorder(bias_ih),
+                f"bias_hh_l{layer}": reorder(bias_hh),
+            }
+            for name, value in values.items():
+                getattr(module, name).copy_(torch.tensor(value))
+    return module
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_stacked_lstm(tmp_path, device):
+    torch = pytest.importorskip("torch")
+    _skip_if_unavailable(device)
+    model, inputs, constants = _stacked_lstm_model()
+    runtime = _load(tmp_path, model, device, requires_grad=True)
+
+    arrays = {name: wp.array(value, device=device, requires_grad=True) for name, value in inputs.items()}
+    tape = wp.Tape()
+    with tape:
+        outputs = runtime(arrays)
+    upstream = {name: _uniform(tuple(array.shape), low=-1.0, high=1.0) for name, array in outputs.items()}
+    tape.backward(grads={array: wp.array(upstream[name], device=device) for name, array in outputs.items()})
+
+    module = _stacked_lstm_reference(torch, constants)
+    torch_inputs = {name: torch.tensor(value, dtype=torch.double, requires_grad=True) for name, value in inputs.items()}
+    y, (h_n, c_n) = module(torch_inputs["x"], (torch_inputs["h0"], torch_inputs["c0"]))
+    expected = {"y": y, "h_n": h_n, "c_n": c_n}
+    sum((expected[name] * torch.tensor(upstream[name], dtype=torch.double)).sum() for name in outputs).backward()
+
+    for name, output in outputs.items():
+        np.testing.assert_allclose(output.numpy(), expected[name].detach().numpy(), rtol=1.0e-4, atol=1.0e-5)
+    for name, array in arrays.items():
+        np.testing.assert_allclose(array.grad.numpy(), torch_inputs[name].grad.numpy(), rtol=1.0e-3, atol=1.0e-4)
+
+
+def _non_contiguous_slice_model():
+    """A slice along a non-leading axis, which is not contiguous, read by a ``Squeeze``."""
+    constants = {
+        "starts": np.array([1], np.int64),
+        "ends": np.array([2], np.int64),
+        "axes": np.array([1], np.int64),
+        "squeeze_axes": np.array([1], np.int64),
+    }
+    nodes = [
+        helper.make_node("Slice", ["x", "starts", "ends", "axes"], ["column"]),
+        helper.make_node("Squeeze", ["column", "squeeze_axes"], ["output"]),
+    ]
+    inputs = {"x": _uniform((2, 3))}
+    return _make_model(nodes, inputs, {"output": np.float32}, constants), inputs
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_non_contiguous_slice(tmp_path, device):
+    """A slice along a non-leading axis is not contiguous, so it is copied for the operations reading it."""
+    _skip_if_unavailable(device)
+    model, inputs = _non_contiguous_slice_model()
+    runtime = _load(tmp_path, model, device, requires_grad=True)
+
+    x = wp.array(inputs["x"], device=device, requires_grad=True)
+    tape = wp.Tape()
+    with tape:
+        output = runtime({"x": x})["output"]
+    (expected,) = ReferenceEvaluator(model).run(None, inputs)
+    np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-5, atol=1.0e-6)
+    tape.backward(grads={output: wp.ones(output.shape, dtype=wp.float32, device=device)})
+    expected_grad = np.zeros((2, 3), np.float32)
+    expected_grad[:, 1] = 1.0
+    np.testing.assert_allclose(x.grad.numpy(), expected_grad)
+
+
+def test_stacked_lstm_cuda_graph_capture(tmp_path):
+    torch = pytest.importorskip("torch")
+    _skip_if_unavailable("cuda")
+    model, inputs, constants = _stacked_lstm_model()
+    runtime = _load(tmp_path, model, "cuda")
+    module = _stacked_lstm_reference(torch, constants)
+
+    arrays = {name: wp.array(value, device="cuda") for name, value in inputs.items()}
+    runtime.prepare(arrays)
+    with wp.ScopedCapture(device="cuda") as capture:
+        outputs = runtime(arrays)
+    assert all(runtime(arrays)[name].ptr == output.ptr for name, output in outputs.items())
+
+    for _ in range(2):
+        new_inputs = {name: _uniform(value.shape, -1.0, 1.0) for name, value in inputs.items()}
+        for name, value in new_inputs.items():
+            arrays[name].assign(value)
+        wp.capture_launch(capture.graph)
+        with torch.no_grad():
+            values = {name: torch.tensor(value, dtype=torch.double) for name, value in new_inputs.items()}
+            y, (h_n, c_n) = module(values["x"], (values["h0"], values["c0"]))
+        for name, expected in {"y": y, "h_n": h_n, "c_n": c_n}.items():
+            np.testing.assert_allclose(outputs[name].numpy(), expected.numpy(), rtol=1.0e-4, atol=1.0e-5)
+
+
+def test_non_contiguous_slice_cuda_graph_capture(tmp_path):
+    _skip_if_unavailable("cuda")
+    model, inputs = _non_contiguous_slice_model()
+    runtime = _load(tmp_path, model, "cuda")
+
+    x = wp.array(inputs["x"], device="cuda")
+    runtime.prepare({"x": x})
+    with wp.ScopedCapture(device="cuda") as capture:
+        output = runtime({"x": x})["output"]
+    assert runtime({"x": x})["output"].ptr == output.ptr
+
+    for _ in range(2):
+        value = _uniform((2, 3), -1.0, 1.0)
+        x.assign(value)
+        wp.capture_launch(capture.graph)
+        np.testing.assert_array_equal(output.numpy(), value[:, 1])
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_constant_nodes(tmp_path, device):
     _skip_if_unavailable(device)
@@ -1016,6 +1259,25 @@ _UNSUPPORTED = {
         _Case("Identity", (), {"x": _uniform((2,))}, {"c": np.array(1.0, np.float32)}, node_inputs=("c",)),
         "scalar constant 'c'",
     ),
+    "slice_negative_steps": (
+        _Case(
+            "Slice",
+            (),
+            {"x": _uniform((4,))},
+            {"starts": np.array([3], np.int64), "ends": np.array([0], np.int64), "steps": np.array([-1], np.int64)},
+            node_inputs=("x", "starts", "ends", "", "steps"),
+        ),
+        "only positive steps",
+    ),
+    "slice_runtime_bounds": (
+        _Case(
+            "Slice",
+            (),
+            {"x": _uniform((4,)), "starts": np.array([1], np.int64), "ends": np.array([3], np.int64)},
+            output_shapes=((2,),),
+        ),
+        "must be a constant",
+    ),
     "constant_only_operands": (
         _Case("Add", (), {"x": _uniform((2,))}, {"a": _uniform((2,)), "b": _uniform((2,))}, node_inputs=("a", "b")),
         "only constant inputs",
@@ -1032,6 +1294,60 @@ def test_rejects_unsupported_models(tmp_path, case_id):
 
 # models whose (static) input shapes do not match their weights, which is only detected when running them
 _INVALID_SHAPES = {
+    "slice_axes_out_of_range": (
+        _Case(
+            "Slice",
+            (),
+            {"x": _uniform((2, 3))},
+            {"starts": np.array([0], np.int64), "ends": np.array([1], np.int64), "axes": np.array([2], np.int64)},
+            output_shapes=((1, 3),),
+        ),
+        "axes \\(2,\\) are out of range for input shape \\(2, 3\\)",
+    ),
+    "slice_duplicate_axes": (
+        _Case(
+            "Slice",
+            (),
+            {"x": _uniform((2, 3))},
+            {
+                "starts": np.array([0, 0], np.int64),
+                "ends": np.array([1, 1], np.int64),
+                "axes": np.array([0, -2], np.int64),
+            },
+            output_shapes=((1, 3),),
+        ),
+        "axes \\(0, -2\\) contain duplicates for input shape \\(2, 3\\)",
+    ),
+    "concat_axis_out_of_range": (
+        _Case(
+            "Concat",
+            (),
+            {"a": _uniform((2, 3)), "b": _uniform((2, 3))},
+            attributes={"axis": 2},
+            output_shapes=((4, 3),),
+        ),
+        "axis 2 is out of range for input shapes",
+    ),
+    "concat_ranks_differ": (
+        _Case(
+            "Concat",
+            (),
+            {"a": _uniform((2, 3)), "b": _uniform((2,))},
+            attributes={"axis": 1},
+            output_shapes=((2, 4),),
+        ),
+        "differ outside axis 1",
+    ),
+    "concat_shapes_differ": (
+        _Case(
+            "Concat",
+            (),
+            {"a": _uniform((2, 3)), "b": _uniform((3, 3))},
+            attributes={"axis": 1},
+            output_shapes=((2, 6),),
+        ),
+        "input shapes \\(\\(2, 3\\), \\(3, 3\\)\\) differ outside axis 1",
+    ),
     "squeeze_axes_out_of_range": (
         _Case("Squeeze", (), {"x": _uniform((2, 1))}, {"axes": np.array([3], np.int64)}, output_shapes=((2,),)),
         "axes \\(3,\\) are out of range for input shape \\(2, 1\\)",
@@ -1108,11 +1424,42 @@ def test_rejects_scalar_squeeze_outputs(tmp_path):
         runtime({"x": wp.zeros(1, dtype=wp.float32, device="cpu")})
 
 
+def test_rejects_empty_slice_outputs(tmp_path):
+    case = _Case(
+        "Slice", (), {"x": _uniform((4,))}, {"starts": np.array([2], np.int64), "ends": np.array([2], np.int64)}
+    )
+    runtime = _load(tmp_path, case.model(), "cpu")
+    with pytest.raises(NotImplementedError, match="empty outputs are not supported"):
+        runtime({"x": wp.zeros(4, dtype=wp.float32, device="cpu")})
+
+
 def test_rejects_operands_with_different_dtypes(tmp_path):
     case = _Case("Pow", (), {"x": _uniform((2, 3)), "y": _integers((3,))}, output_shapes=((2, 3),))
     runtime = _load(tmp_path, case.model(), "cpu")
     with pytest.raises(NotImplementedError, match="different dtypes \\(float32, int32\\)"):
         runtime({name: wp.array(value, device="cpu") for name, value in case.inputs.items()})
+
+
+def test_rejects_concat_inputs_with_different_dtypes(tmp_path):
+    case = _Case("Concat", (), {"a": _uniform((2, 3)), "b": _integers((2, 3))}, attributes={"axis": 0})
+    runtime = _load(tmp_path, case.model(), "cpu")
+    with pytest.raises(NotImplementedError, match="different dtypes \\(float32, int32\\)"):
+        runtime({name: wp.array(value, device="cpu") for name, value in case.inputs.items()})
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [{"ends": [1]}, {"ends": [1, 1], "axes": [0]}, {"ends": [1, 1], "steps": [1]}],
+    ids=["ends", "axes", "steps"],
+)
+def test_rejects_slice_bounds_of_different_lengths(tmp_path, bounds):
+    constants = {"starts": np.array([0, 0], np.int64)} | {
+        name: np.array(value, np.int64) for name, value in bounds.items()
+    }
+    node_inputs = ("x", "starts", "ends", "axes" if "axes" in bounds else "", "steps" if "steps" in bounds else "")
+    case = _Case("Slice", (), {"x": _uniform((2, 3))}, constants, node_inputs=node_inputs, output_shapes=((1, 3),))
+    with pytest.raises(ValueError, match="must have the same length"):
+        _load(tmp_path, case.model(), "cpu")
 
 
 def test_rejects_runtime_broadcasting_with_gradients(tmp_path):

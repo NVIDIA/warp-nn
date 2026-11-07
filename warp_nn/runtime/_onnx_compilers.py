@@ -28,6 +28,7 @@ import warp as wp
 
 from warp_nn import nn
 from warp_nn.runtime._onnx_kernels import batch_first_to_onnx_sequence, sequence_first_to_batch_first
+from warp_nn.utils.ops import copy
 
 
 if TYPE_CHECKING:
@@ -201,6 +202,57 @@ class _ReshapeOperation(_Operation):
     def __call__(self, tensors: dict[str, wp.array]) -> None:
         input = tensors[self.input]
         tensors[self.node.outputs[0]] = input.reshape(self.output_shape(tuple(input.shape)))
+
+
+@dataclass(eq=False, kw_only=True)
+class _SliceOperation(_Operation):
+    """Slice a runtime array into a view.
+
+    A non-contiguous view (sliced along a non-leading axis, or with a step) is copied into a cached array by a kernel
+    recorded on the active tape (if any), since the operations reading it may require contiguous arrays.
+    """
+
+    node: _Node
+    input: str
+    starts: tuple[int, ...]
+    ends: tuple[int, ...]
+    axes: tuple[int, ...]
+    steps: tuple[int, ...]
+    requires_grad: bool
+    _cache: dict[tuple[tuple[int, ...], type], wp.array] = field(default_factory=dict, init=False, repr=False)
+
+    @property
+    def modules(self) -> tuple[nn.Module, ...]:
+        return ()
+
+    def __call__(self, tensors: dict[str, wp.array]) -> None:
+        input = tensors[self.input]
+        shape = tuple(input.shape)
+        if any(not -len(shape) <= axis < len(shape) for axis in self.axes):
+            raise ValueError(f"OnnxRuntime Slice: axes {self.axes} are out of range for input shape {shape}")
+        if len({axis % len(shape) for axis in self.axes}) != len(self.axes):
+            raise ValueError(f"OnnxRuntime Slice: axes {self.axes} contain duplicates for input shape {shape}")
+        key = [slice(None)] * len(shape)
+        for start, end, axis, step in zip(self.starts, self.ends, self.axes, self.steps):
+            # clamp the (possibly negative or out-of-range) bounds to the axis, as for a positive ONNX step
+            size = shape[axis]
+            start = min(max(start + size if start < 0 else start, 0), size)
+            end = min(max(end + size if end < 0 else end, 0), size)
+            if end <= start:
+                raise NotImplementedError(
+                    f"OnnxRuntime Slice: empty outputs are not supported, got bounds [{start}, {end}) for axis {axis} "
+                    f"of input shape {shape}"
+                )
+            key[axis] = slice(start, end, step)
+        output = input[tuple(key)]
+        if not output.is_contiguous:
+            cache_key = (tuple(output.shape), output.dtype)
+            if cache_key not in self._cache:
+                self._cache[cache_key] = wp.empty(
+                    output.shape, dtype=output.dtype, device=output.device, requires_grad=self.requires_grad
+                )
+            output = copy(output, self._cache[cache_key])
+        tensors[self.node.outputs[0]] = output
 
 
 @dataclass(eq=False, kw_only=True)
@@ -478,6 +530,43 @@ def _compile_clip(node: _Node, context: CompilationContext) -> _Operation:
         bounds = tuple(context.constant(node, index, required=False) for index in (1, 2))
     min_val, max_val = (None if bound is None else float(np.asarray(bound).item()) for bound in bounds)
     return _elementwise_operation(node, context, (nn.Clip(min_val, max_val, requires_grad=context.requires_grad),), 1)
+
+
+def _compile_concat(node: _Node, context: CompilationContext) -> _Operation:
+    """Compile an ONNX ``Concat`` node into a :class:`Concatenate` module.
+
+    The ``axis`` attribute is required, except before opset 4, where it defaults to 1. Since the runtime arrays are
+    contiguous, the inputs (of any number of dimensions) are concatenated along their last dimension as 2D views
+    with shape ``(prod(shape[:axis]), prod(shape[axis:]))``, or as 1D views if there is a single row
+    (e.g. if ``axis`` is 0).
+    """
+    axis = int(_attributes(node, axis=1 if context.opset < 4 else None)["axis"])
+    module = nn.Concatenate(dim=-1, requires_grad=context.requires_grad)
+
+    def forward(*inputs: wp.array) -> wp.array:
+        shapes = tuple(tuple(input.shape) for input in inputs)
+        ndim = len(shapes[0])
+        if not -ndim <= axis < ndim:
+            raise ValueError(f"OnnxRuntime Concat: axis {axis} is out of range for input shapes {shapes}")
+        dim = axis % ndim
+        if any(
+            len(shape) != ndim or shape[:dim] + shape[dim + 1 :] != shapes[0][:dim] + shapes[0][dim + 1 :]
+            for shape in shapes
+        ):
+            raise ValueError(f"OnnxRuntime Concat: input shapes {shapes} differ outside axis {dim}")
+        dtypes = {input.dtype for input in inputs}
+        if len(dtypes) > 1:
+            names = ", ".join(sorted(dtype.__name__ for dtype in dtypes))
+            raise NotImplementedError(f"OnnxRuntime Concat: inputs with different dtypes ({names}) are not supported")
+        rows = math.prod(shapes[0][:dim])
+        views = tuple(
+            input.reshape((math.prod(shape),) if rows == 1 else (rows, math.prod(shape[dim:])))
+            for input, shape in zip(inputs, shapes)
+        )
+        return module(*views).reshape(shapes[0][:dim] + (sum(shape[dim] for shape in shapes),) + shapes[0][dim + 1 :])
+
+    inputs = tuple(context.tensor(node, index) for index in range(len(node.inputs)))
+    return _ModuleOperation(node=node, module=module, inputs=inputs, forward=forward)
 
 
 def _compile_conv(node: _Node, context: CompilationContext) -> _Operation:
@@ -783,6 +872,36 @@ def _compile_trailing_norm(node: _Node, context: CompilationContext) -> _Operati
     return _ModuleOperation(node=node, module=module, inputs=(context.tensor(node, 0),), forward=forward)
 
 
+def _compile_slice(node: _Node, context: CompilationContext) -> _Operation:
+    """Compile an ONNX ``Slice`` node, whose bounds are attributes (opset < 10) or constant inputs, into a view.
+
+    The view is copied into a cached array if it is not contiguous. Only positive steps are supported.
+    """
+    if context.opset < 10:
+        attributes = _attributes(node, starts=None, ends=None, axes=None)
+        starts, ends, axes, steps = attributes["starts"], attributes["ends"], attributes["axes"], None
+    else:
+        _attributes(node)
+        starts, ends = context.constant(node, 1), context.constant(node, 2)
+        axes, steps = context.constant(node, 3, required=False), context.constant(node, 4, required=False)
+    starts, ends = tuple(int(i) for i in np.ravel(starts)), tuple(int(i) for i in np.ravel(ends))
+    axes = tuple(range(len(starts))) if axes is None else tuple(int(i) for i in np.ravel(axes))
+    steps = (1,) * len(starts) if steps is None else tuple(int(i) for i in np.ravel(steps))
+    if not len(starts) == len(ends) == len(axes) == len(steps):
+        raise ValueError("OnnxRuntime Slice: 'starts', 'ends', 'axes' and 'steps' must have the same length")
+    if any(step <= 0 for step in steps):
+        raise NotImplementedError(f"OnnxRuntime Slice: only positive steps are supported, got {steps}")
+    return _SliceOperation(
+        node=node,
+        input=context.tensor(node, 0),
+        starts=starts,
+        ends=ends,
+        axes=axes,
+        steps=steps,
+        requires_grad=context.requires_grad,
+    )
+
+
 def _compile_softmax(node: _Node, context: CompilationContext) -> _Operation:
     """Compile an ONNX ``Softmax``/``LogSoftmax`` node into a :class:`Softmax`/:class:`LogSoftmax` module.
 
@@ -858,6 +977,7 @@ COMPILERS: dict[str, _Compiler] = {
     "Ceil": _elementwise(nn.Ceil),
     "Celu": _elementwise(nn.CELU, attributes={"alpha": ("alpha", 1.0)}),
     "Clip": _compile_clip,
+    "Concat": _compile_concat,
     "Conv": _compile_conv,
     "Cos": _elementwise(nn.Cos),
     "Cosh": _elementwise(nn.Cosh),
@@ -906,6 +1026,7 @@ COMPILERS: dict[str, _Compiler] = {
     "Sign": _elementwise(nn.Sign),
     "Sin": _elementwise(nn.Sin),
     "Sinh": _elementwise(nn.Sinh),
+    "Slice": _compile_slice,
     "Softmax": _compile_softmax,
     "Softplus": _elementwise(nn.Softplus),
     "Softsign": _elementwise(nn.Softsign),

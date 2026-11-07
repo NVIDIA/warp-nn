@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- Add `Concatenate` operator, to concatenate arrays along an existing dimension
+- Add `Slice` and `Concat` support to the ONNX inference runtime
+
 ## [0.4.1] - 2026-10-18
 ### Changed
 - Update default kernel configuration for tiles of 1024 elements
