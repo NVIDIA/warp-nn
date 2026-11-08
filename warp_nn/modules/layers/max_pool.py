@@ -46,6 +46,21 @@ class _MaxPool(Module):
             kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, dilation=self.dilation
         )
 
+    def _allocate_output(
+        self, shape: tuple[int, ...], view_prefix: tuple[int, ...]
+    ) -> tuple[wp.array, wp.array, wp.array]:
+        """Allocate the output array, its 4D view and the indices array, for the given input shape."""
+        output_spatial = tuple(
+            output_size(size, kernel_size=k, stride=s, padding=p, dilation=d, ceil_mode=self.ceil_mode)
+            for size, k, s, p, d in zip(shape[2:], self.kernel_size, self.stride, self.padding, self.dilation)
+        )
+        output = wp.empty(
+            shape[:2] + output_spatial, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad
+        )
+        view_shape = shape[:2] + view_prefix + output_spatial
+        indices = wp.empty(view_shape, dtype=wp.int32, device=self.device)
+        return output, output.reshape(view_shape), indices
+
     def __call__(self, input: wp.array) -> wp.array:
         spatial_dims = len(self.kernel_size)
         shape = tuple(input.shape)
@@ -57,18 +72,7 @@ class _MaxPool(Module):
         # 4D views of the input and output arrays (1D pooling uses a height of 1)
         view_prefix = (1,) * (2 - spatial_dims)
         # cache output and indices
-        if shape not in self._cache:
-            output_spatial = tuple(
-                output_size(size, kernel_size=k, stride=s, padding=p, dilation=d, ceil_mode=self.ceil_mode)
-                for size, k, s, p, d in zip(shape[2:], self.kernel_size, self.stride, self.padding, self.dilation)
-            )
-            output = wp.empty(
-                shape[:2] + output_spatial, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad
-            )
-            view_shape = shape[:2] + view_prefix + output_spatial
-            indices = wp.empty(view_shape, dtype=wp.int32, device=self.device)
-            self._cache[shape] = (output, output.reshape(view_shape), indices)
-        output, output_view, indices = self._cache[shape]
+        output, output_view, indices = self.cache.get(shape, lambda: self._allocate_output(shape, view_prefix))
         # launch kernels
         input_view = contiguous(input).reshape(shape[:2] + view_prefix + shape[2:])
         wp.launch(

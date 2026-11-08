@@ -173,18 +173,18 @@ class BatchNorm(Module):
         if self.training and count <= 1:
             raise ValueError(f"Expected more than 1 value per channel when training, got input shape {shape}")
         # cache output (and batch statistics, only allocated when used)
-        if shape not in self._cache:
-            output = wp.empty(shape, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad)
-            self._cache[shape] = (output, None)
-        output, moments = self._cache[shape]
+        output = self.cache.get(
+            shape, lambda: wp.empty(shape, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad)
+        )
         input_view = contiguous(input).reshape(view_shape)
         # compute (and track) the batch statistics, or use the running estimates
         if self.training or not self.track_running_stats:
-            if moments is None:
-                moments = Moments(
+            moments = self.cache.get(
+                ("moments", shape),
+                lambda: Moments(
                     self.num_features, count, centered=True, device=self.device, requires_grad=self.requires_grad
-                )
-                self._cache[shape] = (output, moments)
+                ),
+            )
             moments.compute(input_view, device=self.device)
             mean, var = moments.mean, moments.var
             if self.training and self.track_running_stats:

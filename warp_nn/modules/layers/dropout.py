@@ -96,6 +96,12 @@ class Dropout(Module):
         self._seed = self._seed.to(self.device)
         return self
 
+    def _allocate_output(self, shape: tuple[int, ...], dtype: type) -> tuple[wp.array, wp.array, wp.array]:
+        """Allocate the output array, its flat view and the (flat) mask array."""
+        output = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+        mask = wp.empty(output.size, dtype=dtype, device=self.device)
+        return output, output.flatten(), mask
+
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the module.
 
@@ -114,11 +120,7 @@ class Dropout(Module):
         shape = tuple(input.shape)
         key = (shape, dtype)
         # cache output and mask
-        if key not in self._cache:
-            output = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-            mask = wp.empty(input.size, dtype=dtype, device=self.device)
-            self._cache[key] = (output, output.flatten(), mask)
-        output, output_view, mask = self._cache[key]
+        output, output_view, mask = self.cache.get(key, lambda: self._allocate_output(shape, dtype))
         # launch kernels
         scale = 0.0 if self._p == 1.0 else 1.0 / (1.0 - self._p)
         wp.launch(

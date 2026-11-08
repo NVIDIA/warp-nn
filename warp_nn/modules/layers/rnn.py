@@ -142,6 +142,20 @@ class RNN(Module):
         for parameter in self.parameters():
             kaiming_uniform(parameter, mode="scale", scale=1.0 / self.hidden_size)
 
+    def _allocate_output(
+        self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
+    ) -> tuple[list[wp.array], wp.array, wp.array]:
+        """Allocate the outputs (of each layer), final hidden state and (default) initial hidden state arrays."""
+        output_shape = (batch_size, sequence_length, self._num_directions * self.hidden_size)
+        return (
+            [
+                wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+                for _ in range(self.num_layers)
+            ],
+            wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
+            wp.zeros(hidden_shape, dtype=dtype, device=self.device),
+        )
+
     def __call__(self, input: wp.array, hidden: wp.array | None = None) -> tuple[wp.array, wp.array]:
         """Forward pass of the module.
 
@@ -168,17 +182,9 @@ class RNN(Module):
         dtype = input.dtype
         key = (tuple(input.shape), dtype)
         # cache outputs (of each layer), final hidden state and (default) initial hidden state
-        if key not in self._cache:
-            output_shape = (batch_size, sequence_length, num_directions * hidden_size)
-            self._cache[key] = (
-                [
-                    wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-                    for _ in range(self.num_layers)
-                ],
-                wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
-                wp.zeros(hidden_shape, dtype=dtype, device=self.device),
-            )
-        outputs, output_hidden, initial_hidden = self._cache[key]
+        outputs, output_hidden, initial_hidden = self.cache.get(
+            key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
+        )
         if hidden is None:
             hidden = initial_hidden
         # launch kernels, one per layer, direction and time step

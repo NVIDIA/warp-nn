@@ -70,8 +70,6 @@ class Reparameterize(nn.Module):
         """
         super().__init__()
         self._seed = seed
-        # runtime variables
-        self._cache = {}
 
     def __call__(self, mean, logvar):
         """Forward pass of the reparameterization module."""
@@ -79,9 +77,7 @@ class Reparameterize(nn.Module):
         shape = mean.shape
         key = (shape, dtype)
         # cache output
-        if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True)
-        output = self._cache[key]
+        output = self.cache.get(key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=True))
         # launch kernel
         self._seed += 1
         wp.launch(_reparameterize_kernel, dim=shape, inputs=[mean, logvar, self._seed, output], device=self.device)

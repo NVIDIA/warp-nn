@@ -544,7 +544,7 @@ def test_symbolic_dimensions_and_cached_outputs(tmp_path, device):
     runtime = _load(tmp_path, model, device)
     assert _module_types(runtime) == [layers.Linear, activations.ELU, layers.Linear, operators.Tanh]
     # modules allocate their cached outputs lazily
-    assert all(not module._cache for operation in runtime._operations for module in operation.modules)
+    assert all(not module.cache for operation in runtime._operations for module in operation.modules)
 
     for batch in (1, 4):
         obs = _uniform((batch, 6))
@@ -565,9 +565,7 @@ def test_prepare(tmp_path, device):
     runtime = _load(tmp_path, _mlp_model(), device)
 
     def cached_outputs():
-        return {
-            id(value) for operation in runtime._operations for m in operation.modules for value in m._cache.values()
-        }
+        return {id(value) for operation in runtime._operations for m in operation.modules for value in m.cache.values()}
 
     # preparing from a batch size allocates the same cached outputs as preparing from inputs of that shape
     inputs = {"obs": wp.zeros((4, 6), dtype=wp.float32, device=device)}
@@ -634,7 +632,7 @@ def test_prepare(tmp_path, device):
 
     runtime = _load(tmp_path, bitwise_model("batch", "batch"), device)
     runtime.prepare(batch_size=4)
-    ((output,),) = [module._cache.values() for operation in runtime._operations for module in operation.modules]
+    ((output,),) = [module.cache.values() for operation in runtime._operations for module in operation.modules]
     np.testing.assert_array_equal(output.numpy(), np.ones((4, 3)))
 
     with pytest.raises(ValueError, match=r"differently named symbolic dimensions \['m', 'n'\]"):
@@ -644,7 +642,7 @@ def test_prepare(tmp_path, device):
     for a_batch, b_batch in (("", "batch"), (None, "batch")):
         runtime = _load(tmp_path, bitwise_model(a_batch, b_batch), device)
         runtime.prepare(batch_size=4)
-        ((output,),) = [module._cache.values() for operation in runtime._operations for module in operation.modules]
+        ((output,),) = [module.cache.values() for operation in runtime._operations for module in operation.modules]
         assert output.shape == (4, 3)
 
 

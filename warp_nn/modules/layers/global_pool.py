@@ -45,6 +45,16 @@ class GlobalAvgPool(Module):
         """
         super().__init__(requires_grad=requires_grad)
 
+    def _allocate_output(self, shape: tuple[int, ...]) -> tuple[wp.array, wp.array]:
+        """Allocate the output array and its 4D view, for the given input shape."""
+        output = wp.empty(
+            shape[:2] + (1,) * (len(shape) - 2),
+            dtype=wp.float32,
+            device=self.device,
+            requires_grad=self.requires_grad,
+        )
+        return output, output.reshape(shape[:2] + (1, 1))
+
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the module.
 
@@ -56,15 +66,7 @@ class GlobalAvgPool(Module):
         """
         shape, view_shape, kernel_size = _check_input(input)
         # cache output
-        if shape not in self._cache:
-            output = wp.empty(
-                shape[:2] + (1,) * (len(shape) - 2),
-                dtype=wp.float32,
-                device=self.device,
-                requires_grad=self.requires_grad,
-            )
-            self._cache[shape] = (output, output.reshape(shape[:2] + (1, 1)))
-        output, output_view = self._cache[shape]
+        output, output_view = self.cache.get(shape, lambda: self._allocate_output(shape))
         # launch kernel
         wp.launch(
             avg_pool_kernel,
@@ -87,6 +89,17 @@ class GlobalMaxPool(Module):
         """
         super().__init__(requires_grad=requires_grad)
 
+    def _allocate_output(self, shape: tuple[int, ...]) -> tuple[wp.array, wp.array, wp.array]:
+        """Allocate the output array, its 4D view and the indices array, for the given input shape."""
+        output = wp.empty(
+            shape[:2] + (1,) * (len(shape) - 2),
+            dtype=wp.float32,
+            device=self.device,
+            requires_grad=self.requires_grad,
+        )
+        indices = wp.empty(shape[:2] + (1, 1), dtype=wp.int32, device=self.device)
+        return output, output.reshape(shape[:2] + (1, 1)), indices
+
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the module.
 
@@ -98,16 +111,7 @@ class GlobalMaxPool(Module):
         """
         shape, view_shape, kernel_size = _check_input(input)
         # cache output and indices
-        if shape not in self._cache:
-            output = wp.empty(
-                shape[:2] + (1,) * (len(shape) - 2),
-                dtype=wp.float32,
-                device=self.device,
-                requires_grad=self.requires_grad,
-            )
-            indices = wp.empty(shape[:2] + (1, 1), dtype=wp.int32, device=self.device)
-            self._cache[shape] = (output, output.reshape(shape[:2] + (1, 1)), indices)
-        output, output_view, indices = self._cache[shape]
+        output, output_view, indices = self.cache.get(shape, lambda: self._allocate_output(shape))
         # launch kernels
         input_view = contiguous(input).reshape(view_shape)
         wp.launch(

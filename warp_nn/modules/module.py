@@ -25,7 +25,7 @@ import warp as wp
 
 from warp_nn.modules.buffer import Buffer
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import KernelConfig, get_kernel_config, parse_device
+from warp_nn.utils import KernelConfig, cache, get_kernel_config, parse_device
 
 
 class Module(ABC):
@@ -46,12 +46,12 @@ class Module(ABC):
         :param kwargs: Additional keyword arguments.
         """
         self._requires_grad: bool = requires_grad
+        if not hasattr(self, "_cache"):
+            self._cache: cache.Cache = cache.acquire(self)  # idempotent: the same sub-cache for the same module
         if not hasattr(self, "_config"):
             self._config: KernelConfig = get_kernel_config()
         if not hasattr(self, "_device"):
             self._device: wp.Device = parse_device(None)
-        if not hasattr(self, "_cache"):
-            self._cache: dict[Any, Any] = {}
         if not hasattr(self, "_training"):
             self._training: bool = True
         if not hasattr(self, "_modules"):
@@ -92,6 +92,15 @@ class Module(ABC):
         It is read when the module is created (see :py:func:`~warp_nn.utils.kernel_config`).
         """
         return self._config
+
+    @property
+    def cache(self) -> cache.Cache:
+        """Sub-cache of the module in the global cache (see :py:mod:`~warp_nn.utils.cache`).
+
+        It holds the data cached by the module (e.g. the output arrays of the forward pass),
+        which is cleared when the module is moved to another device.
+        """
+        return self._cache
 
     @property
     def device(self) -> wp.Device:

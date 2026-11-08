@@ -4,6 +4,7 @@ Utils
 .. toctree::
     :hidden:
 
+    Cache <utils/cache>
     Kernel Configuration <utils/config>
     Device <utils/device>
     Graph <utils/graph>

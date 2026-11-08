@@ -89,6 +89,17 @@ class SoftmaxBase(Module):
         """The dimension along which the function is computed."""
         return self._dim
 
+    def _allocate_output(
+        self, shape: tuple[int, ...], view_shape: tuple[int, int, int], dtype: type
+    ) -> tuple[wp.array, wp.array, wp.array, wp.array]:
+        """Allocate the output array, its 3D view and the intermediate (maximum and sum) arrays."""
+        output = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+        reduced_shape = (view_shape[0], 1, view_shape[2])
+        accumulation_dtype = ACCUMULATION_DTYPES[dtype]
+        maximum = wp.empty(reduced_shape, dtype=accumulation_dtype, device=self.device)
+        total = wp.empty(reduced_shape, dtype=accumulation_dtype, device=self.device, requires_grad=self.requires_grad)
+        return output, output.reshape(view_shape), maximum, total
+
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the activation function.
 
@@ -111,16 +122,9 @@ class SoftmaxBase(Module):
         view_shape = (math.prod(shape[:dim]), shape[dim], math.prod(shape[dim + 1 :]))
         key = (shape, dtype)
         # cache output and intermediate arrays
-        if key not in self._cache:
-            output = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-            reduced_shape = (view_shape[0], 1, view_shape[2])
-            accumulation_dtype = ACCUMULATION_DTYPES[dtype]
-            maximum = wp.empty(reduced_shape, dtype=accumulation_dtype, device=self.device)
-            total = wp.empty(
-                reduced_shape, dtype=accumulation_dtype, device=self.device, requires_grad=self.requires_grad
-            )
-            self._cache[key] = (output, output.reshape(view_shape), maximum, total)
-        output, output_view, maximum, total = self._cache[key]
+        output, output_view, maximum, total = self.cache.get(
+            key, lambda: self._allocate_output(shape, view_shape, dtype)
+        )
         if output.size == 0:
             return output
         # launch kernels

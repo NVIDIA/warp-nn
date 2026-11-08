@@ -5,6 +5,8 @@
 - Add `Concatenate` operator, to concatenate arrays along an existing dimension
 - Add `Slice` and `Concat` support to the ONNX inference runtime
 - Add the `config` property to modules, to get the kernel configuration with which the module was created
+- Add the global cache (`warp_nn.utils.cache`), with functions to clear and disable/bypass it, where modules and
+  ONNX runtime operations store their cached data, and the `cache` property to modules to access their own cache
 
 ## [0.4.1] - 2026-10-18
 ### Changed

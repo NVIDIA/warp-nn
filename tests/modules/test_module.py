@@ -218,17 +218,17 @@ def test_train_eval(capsys):
 
 def test_cache(capsys, modules: list[nn.Module]):
     # the cache is initialized by the base class, for every module
-    assert all(module._cache == {} for module in modules)
+    assert all(len(module.cache) == 0 for module in modules)
     # the arrays cached by a forward pass are kept when moving the module to the same device
     module = nn.ReLU().to("cpu")
     output = module(wp.ones((2, 4), dtype=wp.float32, device="cpu"))
-    assert len(module._cache) == 1
+    assert len(module.cache) == 1
     module.to("cpu")
     assert module(wp.ones((2, 4), dtype=wp.float32, device="cpu")) is output
     # ... and dropped when moving the module to another device
     if utilities.is_device_available("cuda"):
         module.to("cuda")
-        assert module._cache == {}
+        assert len(module.cache) == 0
 
 
 @pytest.mark.parametrize(

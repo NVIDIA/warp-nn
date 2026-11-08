@@ -164,6 +164,30 @@ class LSTM(Module):
         for parameter in self.parameters():
             kaiming_uniform(parameter, mode="scale", scale=1.0 / self.hidden_size)
 
+    def _allocate_output(
+        self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
+    ) -> tuple[list[wp.array], wp.array, tuple[wp.array, wp.array], tuple[wp.array, wp.array]]:
+        """Allocate the outputs (of each layer), cell states (of each layer, direction and time step),
+        final hidden and cell states and (default) initial hidden and cell states arrays."""
+        num_directions, hidden_size = self._num_directions, self.hidden_size
+        output_shape = (batch_size, sequence_length, num_directions * hidden_size)
+        cell_shape = (num_directions * self.num_layers, sequence_length, batch_size, hidden_size)
+        return (
+            [
+                wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+                for _ in range(self.num_layers)
+            ],
+            wp.empty(cell_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
+            (
+                wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
+                wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
+            ),
+            (
+                wp.zeros(hidden_shape, dtype=dtype, device=self.device),
+                wp.zeros(hidden_shape, dtype=dtype, device=self.device),
+            ),
+        )
+
     def __call__(
         self, input: wp.array, hidden: tuple[wp.array, wp.array] | None = None
     ) -> tuple[wp.array, tuple[wp.array, wp.array]]:
@@ -199,25 +223,9 @@ class LSTM(Module):
         key = (tuple(input.shape), dtype)
         # cache outputs (of each layer), cell states (of each layer, direction and time step),
         # final hidden and cell states and (default) initial hidden and cell states
-        if key not in self._cache:
-            output_shape = (batch_size, sequence_length, num_directions * hidden_size)
-            cell_shape = (num_directions * self.num_layers, sequence_length, batch_size, hidden_size)
-            self._cache[key] = (
-                [
-                    wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-                    for _ in range(self.num_layers)
-                ],
-                wp.empty(cell_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
-                (
-                    wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
-                    wp.empty(hidden_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
-                ),
-                (
-                    wp.zeros(hidden_shape, dtype=dtype, device=self.device),
-                    wp.zeros(hidden_shape, dtype=dtype, device=self.device),
-                ),
-            )
-        outputs, cells, output_hidden, initial_hidden = self._cache[key]
+        outputs, cells, output_hidden, initial_hidden = self.cache.get(
+            key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
+        )
         if hidden is None:
             hidden = initial_hidden
         # launch kernels, one per layer, direction and time step

@@ -82,9 +82,9 @@ class Min(Module):
         key = (shape, dtype)
         kernel = self._kernels[(len(shape), dtype)]
         # cache output
-        if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-        output = self._cache[key]
+        output = self.cache.get(
+            key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+        )
         # launch kernel
         wp.launch_tiled(
             kernel,

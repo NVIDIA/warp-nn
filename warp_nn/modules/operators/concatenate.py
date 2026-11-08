@@ -96,10 +96,15 @@ class Concatenate(Module):
         key = (output_shape, dtype)
         kernel = self._kernels[(ndim, dtype)]
         # cache output
-        if key not in self._cache:
-            requires_grad = self.requires_grad and wp.types.type_is_float(dtype)
-            self._cache[key] = wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=requires_grad)
-        output = self._cache[key]
+        output = self.cache.get(
+            key,
+            lambda: wp.empty(
+                output_shape,
+                dtype=dtype,
+                device=self.device,
+                requires_grad=self.requires_grad and wp.types.type_is_float(dtype),
+            ),
+        )
         # launch kernels (one per input array, which is copied into its slice of the output array)
         offset = 0
         for input, input_shape in zip(inputs, shapes):

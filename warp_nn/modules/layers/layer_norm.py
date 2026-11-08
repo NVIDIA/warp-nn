@@ -129,11 +129,13 @@ class LayerNorm(Module):
         features = math.prod(self.normalized_shape)
         rows = math.prod(shape) // features
         # cache output and statistics
-        if shape not in self._cache:
-            output = wp.empty(shape, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad)
-            moments = Moments(rows, features, centered=True, device=self.device, requires_grad=self.requires_grad)
-            self._cache[shape] = (output, moments)
-        output, moments = self._cache[shape]
+        output, moments = self.cache.get(
+            shape,
+            lambda: (
+                wp.empty(shape, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad),
+                Moments(rows, features, centered=True, device=self.device, requires_grad=self.requires_grad),
+            ),
+        )
         # launch kernels
         input = contiguous(input)
         moments.compute(input.reshape((1, rows, features)), device=self.device)

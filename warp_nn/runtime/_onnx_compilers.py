@@ -28,6 +28,7 @@ import warp as wp
 
 from warp_nn import nn
 from warp_nn.runtime._onnx_kernels import batch_first_to_onnx_sequence, sequence_first_to_batch_first
+from warp_nn.utils import cache
 from warp_nn.utils.ops import copy
 
 
@@ -165,6 +166,19 @@ class _Operation(ABC):
         """Read the inputs from, and write the outputs to, the tensor table."""
 
 
+class _CachedOperation(_Operation):
+    """Graph node that caches data (e.g. intermediate arrays) in its own sub-cache of the global cache."""
+
+    @property
+    def cache(self) -> cache.Cache:
+        """Sub-cache of the operation in the global cache (see :py:mod:`~warp_nn.utils.cache`), acquired on first access."""
+        try:
+            return self._cache
+        except AttributeError:
+            self._cache: cache.Cache = cache.acquire(self)
+            return self._cache
+
+
 @dataclass(eq=False, kw_only=True)
 class _ModuleOperation(_Operation):
     """Call a module (or a function wrapping it) with named runtime inputs and register its outputs."""
@@ -205,7 +219,7 @@ class _ReshapeOperation(_Operation):
 
 
 @dataclass(eq=False, kw_only=True)
-class _SliceOperation(_Operation):
+class _SliceOperation(_CachedOperation):
     """Slice a runtime array into a view.
 
     A non-contiguous view (sliced along a non-leading axis, or with a step) is copied into a cached array by a kernel
@@ -219,7 +233,6 @@ class _SliceOperation(_Operation):
     axes: tuple[int, ...]
     steps: tuple[int, ...]
     requires_grad: bool
-    _cache: dict[tuple[tuple[int, ...], type], wp.array] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def modules(self) -> tuple[nn.Module, ...]:
@@ -246,17 +259,18 @@ class _SliceOperation(_Operation):
             key[axis] = slice(start, end, step)
         output = input[tuple(key)]
         if not output.is_contiguous:
-            cache_key = (tuple(output.shape), output.dtype)
-            if cache_key not in self._cache:
-                self._cache[cache_key] = wp.empty(
+            buffer = self.cache.get(
+                (tuple(output.shape), output.dtype),
+                lambda: wp.empty(
                     output.shape, dtype=output.dtype, device=output.device, requires_grad=self.requires_grad
-                )
-            output = copy(output, self._cache[cache_key])
+                ),
+            )
+            output = copy(output, buffer)
         tensors[self.node.outputs[0]] = output
 
 
 @dataclass(eq=False, kw_only=True)
-class _ElementwiseOperation(_Operation):
+class _ElementwiseOperation(_CachedOperation):
     """Call element-wise modules with multidirectional (NumPy-style) broadcasting of their operands.
 
     Element-wise modules require 1D to 3D operands with the same shape and data type. Therefore, operands are
@@ -272,7 +286,6 @@ class _ElementwiseOperation(_Operation):
     node: _Node
     chain: tuple[nn.Module, ...]
     operands: tuple[_Operand, ...]
-    _cache: dict[tuple[int, tuple[int, ...], type], wp.array] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def modules(self) -> tuple[nn.Module, ...]:
@@ -308,27 +321,26 @@ class _ElementwiseOperation(_Operation):
             return value
         key = (index, shape, dtype)
         if isinstance(value, np.ndarray):
-            if key not in self._cache:
-                self._cache[key] = wp.array(
+            return self.cache.get(
+                key,
+                lambda: wp.array(
                     np.broadcast_to(value, shape).astype(wp.dtype_to_numpy(dtype)),
                     dtype=dtype,
                     device=self.chain[0].device,
-                )
-            return self._cache[key]
+                ),
+            )
         # the copy from the broadcast view would not accumulate the gradients over the broadcast dimensions
         if self.chain[0].requires_grad:
             raise NotImplementedError(
                 f"OnnxRuntime {self.node.op_type}: broadcasting runtime operands is not supported with gradients"
             )
-        if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.chain[0].device)
-        output = self._cache[key]
+        output = self.cache.get(key, lambda: wp.empty(shape, dtype=dtype, device=self.chain[0].device))
         wp.copy(output, _broadcast_view(value, shape))
         return output
 
 
 @dataclass(eq=False, kw_only=True)
-class _RecurrentOperation(_Operation):
+class _RecurrentOperation(_CachedOperation):
     """Execute an ONNX ``RNN``, ``GRU`` or ``LSTM`` node with a single-layer recurrent module.
 
     The module processes batch-first sequences, so the input is converted from the ONNX layout
@@ -343,13 +355,25 @@ class _RecurrentOperation(_Operation):
     flip: bool  # whether the sequence is processed in reverse order by a unidirectional module
     input: str
     initial_states: tuple[str | None, ...]  # initial_h (and initial_c, for LSTM)
-    _cache: dict[tuple[int, int], tuple[wp.array, wp.array | None, tuple[wp.array, ...]]] = field(
-        default_factory=dict, init=False, repr=False
-    )
 
     @property
     def modules(self) -> tuple[nn.Module, ...]:
         return (self.module,)
+
+    def _allocate_output(
+        self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int]
+    ) -> tuple[wp.array, wp.array | None, tuple[wp.array, ...]]:
+        """Allocate the batch-first input, output sequence (only if used) and default (zero) initial states arrays."""
+        module = self.module
+        num_directions, _, hidden_size = state_shape
+        arguments = {"dtype": wp.float32, "device": module.device}
+        grad = {"requires_grad": module.requires_grad}
+        batch_first = wp.empty((batch_size, seq_length, module.input_size), **arguments, **grad)
+        sequence = None
+        if self.node.outputs[0]:
+            sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
+        zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
+        return batch_first, sequence, zeros
 
     def __call__(self, tensors: dict[str, wp.array]) -> None:
         module = self.module
@@ -371,17 +395,9 @@ class _RecurrentOperation(_Operation):
                     f"got {tuple(initial_state.shape)}"
                 )
         # cache the batch-first input, output sequence (only if used) and default (zero) initial states
-        key = (seq_length, batch_size)
-        if key not in self._cache:
-            arguments = {"dtype": wp.float32, "device": module.device}
-            grad = {"requires_grad": module.requires_grad}
-            batch_first = wp.empty((batch_size, seq_length, input_size), **arguments, **grad)
-            sequence = None
-            if self.node.outputs[0]:
-                sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
-            zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
-            self._cache[key] = (batch_first, sequence, zeros)
-        batch_first, sequence, zeros = self._cache[key]
+        batch_first, sequence, zeros = self.cache.get(
+            (seq_length, batch_size), lambda: self._allocate_output(seq_length, batch_size, state_shape)
+        )
         reverse = int(self.flip)
         wp.launch(
             sequence_first_to_batch_first,

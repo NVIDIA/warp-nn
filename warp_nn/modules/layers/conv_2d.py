@@ -224,9 +224,9 @@ class Conv2D(Module):
         shape = (input.shape[0], self.out_channels, out_height, out_width)
         key = (shape, dtype)
         # cache output
-        if key not in self._cache:
-            self._cache[key] = wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
-        output = self._cache[key]
+        output = self.cache.get(
+            key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
+        )
         # launch kernel
         wp.launch(
             self._kernel,

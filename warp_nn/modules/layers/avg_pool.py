@@ -46,6 +46,17 @@ class _AvgPool(Module):
             kernel_size=self.kernel_size, stride=self.stride, padding=self.padding, dilation=(1,) * spatial_dims
         )
 
+    def _allocate_output(self, shape: tuple[int, ...], view_prefix: tuple[int, ...]) -> tuple[wp.array, wp.array]:
+        """Allocate the output array and its 4D view, for the given input shape."""
+        output_spatial = tuple(
+            output_size(size, kernel_size=k, stride=s, padding=p, dilation=1, ceil_mode=self.ceil_mode)
+            for size, k, s, p in zip(shape[2:], self.kernel_size, self.stride, self.padding)
+        )
+        output = wp.empty(
+            shape[:2] + output_spatial, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad
+        )
+        return output, output.reshape(shape[:2] + view_prefix + output_spatial)
+
     def __call__(self, input: wp.array) -> wp.array:
         spatial_dims = len(self.kernel_size)
         shape = tuple(input.shape)
@@ -57,16 +68,7 @@ class _AvgPool(Module):
         # 4D views of the input and output arrays (1D pooling uses a height of 1)
         view_prefix = (1,) * (2 - spatial_dims)
         # cache output
-        if shape not in self._cache:
-            output_spatial = tuple(
-                output_size(size, kernel_size=k, stride=s, padding=p, dilation=1, ceil_mode=self.ceil_mode)
-                for size, k, s, p in zip(shape[2:], self.kernel_size, self.stride, self.padding)
-            )
-            output = wp.empty(
-                shape[:2] + output_spatial, dtype=wp.float32, device=self.device, requires_grad=self.requires_grad
-            )
-            self._cache[shape] = (output, output.reshape(shape[:2] + view_prefix + output_spatial))
-        output, output_view = self._cache[shape]
+        output, output_view = self.cache.get(shape, lambda: self._allocate_output(shape, view_prefix))
         # launch kernel
         wp.launch(
             avg_pool_kernel,
