@@ -20,7 +20,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, resolve_dim
 
-from ._common import tile_transposed_dual_gemm_2d
+from ._common import copy_if_output, tile_transposed_dual_gemm_2d
 
 
 def _create_kernels(config: KernelConfig, *, include_bias: bool):
@@ -249,6 +249,10 @@ class LSTMCell(Module):
                 wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
                 wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad),
             ),
+        )
+        # the hidden and cell states can be the outputs of a previous call (e.g. `h, c = cell(x, (h, c))`)
+        hidden = tuple(
+            copy_if_output(state, output, cache=self.cache, key=("state", i, key)) for i, state in enumerate(hidden)
         )
         # launch kernel
         wp.launch_tiled(

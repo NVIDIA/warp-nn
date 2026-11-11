@@ -13,7 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Hashable
+
 import warp as wp
+
+from warp_nn.utils import copy
+from warp_nn.utils.cache import Cache
 
 
 def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...]:
@@ -24,6 +29,21 @@ def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...
     elif isinstance(value, int):
         return (value,) * length
     raise TypeError(f"Expected a tuple or int, got {type(value)}")
+
+
+def copy_if_output(array: wp.array, outputs: tuple[wp.array, ...], *, cache: Cache, key: Hashable) -> wp.array:
+    """Copy an input array into a cached array if it is one of the (cached) output arrays, or return it as is.
+
+    Recurrent cells read the whole rows of the hidden state (for the matrix multiplications) while writing the outputs
+    tile by tile. Therefore, a hidden state that is the output of a previous call (e.g. ``h = cell(x, h)``) would be
+    overwritten while it is still being read.
+    """
+    if array.ptr is None or all(array.ptr != output.ptr for output in outputs):
+        return array
+    buffer = cache.get(
+        key, lambda: wp.empty(array.shape, dtype=array.dtype, device=array.device, requires_grad=array.requires_grad)
+    )
+    return copy(array, buffer)
 
 
 # Warp functions

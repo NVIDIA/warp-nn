@@ -23,9 +23,16 @@ import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
+from warp_nn.utils import kernel_config
 
 from ... import utilities
-from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
+from .common import (
+    check_forward_rnn,
+    check_forward_rnn_cell_loop,
+    check_gradients_rnn,
+    check_initialize_parameters,
+    check_requires_grad,
+)
 
 
 @hypothesis.given(
@@ -79,6 +86,21 @@ def test_gradients(capsys, device, bias, batch_size, input_size, hidden_size):
         device=device,
         shape=[batch_size, input_size],
         hidden_shapes=[[batch_size, hidden_size]],
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_forward_loop(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # the outputs are fed back as the states of the next time step, with states larger than a (2D) tile
+    with kernel_config(tile_2d=(16, 16)):
+        warp_module = nn.GRUCell(input_size=8, hidden_size=40)
+    check_forward_rnn_cell_loop(
+        warp_module=warp_module,
+        torch_module=torch.nn.GRUCell(input_size=8, hidden_size=40),
+        device=device,
+        batch_size=20,
     )
 
 
