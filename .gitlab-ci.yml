@@ -148,8 +148,69 @@ test-docs:
 
 # Benchmark the modules (vs PyTorch and vs the baseline branch) and expose the reports (HTML, Markdown, JSON and CSV)
 # in the merge request (exposed artifact). Report only: it does not block merging.
-# It runs on a GPU runner, only for merge requests that change the library, the benchmarks, the project configuration
-# or the CI configuration.
+# It runs on a GPU runner. In merge requests, the eager modules benchmark runs when the library, the benchmarks, the
+# project configuration or the CI configuration change; the checkboxes of the merge request description control the
+# other benchmarks and the options (see .gitlab/merge_request_templates/Default.md):
+#   - [x] Run benchmarks against PyTorch  -> compare the modules against PyTorch (checked by default in the template;
+#                                            only an unchecked box disables it, passing --no-pytorch). The Newton
+#                                            benchmark always compares against PyTorch (it has no baseline)
+#   - [x] Run benchmarks in robust mode   -> pass --robust to all the benchmarks (slower, randomized memory placement)
+#   - [x] Run CUDA-graph benchmarks       -> run the CUDA graph mode of the modules benchmark (and of the Newton
+#                                            benchmark, if enabled), regardless of the changed files
+#   - [x] Run Newton benchmarks           -> run the Newton actuator networks benchmark, regardless of the changed files
+# The checkboxes are read when the pipeline is created: after editing the description, run a new pipeline.
+# GitLab only exposes the first 2700 characters of the description to the CI (the template lists the checkboxes first).
+# The rule regexes (RE2) and the grep patterns (ERE) below match the same "- [x] <label>" lines: keep them in sync.
+# On direct commits to the main branches, all the benchmarks are available on demand (manual).
+
+# Rule fragments of the benchmark jobs
+.benchmark-rules:
+  # merge requests that change the benchmarked code
+  merge-request-changes:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: &benchmark-changes
+        - warp_nn/**/*
+        - benchmarks/**/*
+        - pyproject.toml
+        - .gitlab-ci.yml
+  # direct commits to the main branches: available on demand (manual), without blocking the pipeline
+  manual-on-main-branches:
+    - if: $CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"
+      changes: *benchmark-changes
+      when: manual
+      allow_failure: true
+
+# Warn when the description is truncated (the checkboxes after the first 2700 characters are not seen). Best effort:
+# only printed by the benchmark jobs that were created
+.benchmark-description-check:
+  before_script:
+    - |
+      if [ "${CI_MERGE_REQUEST_DESCRIPTION_IS_TRUNCATED:-}" = "true" ]; then
+        echo "WARNING: the merge request description is truncated, checkboxes after its first 2700 characters are ignored"
+      fi
+
+# Robust mode: enabled by the "Run benchmarks in robust mode" checkbox of the merge request description
+# (checked with grep rather than with rules, since it applies on top of whichever rule selected the job)
+.benchmark-robust-mode:
+  before_script:
+    - |
+      if printf '%s\n' "${CI_MERGE_REQUEST_DESCRIPTION:-}" \
+          | grep -E '^[[:space:]]*[-*+][[:space:]]*\[[xX]\][[:space:]]+Run benchmarks in robust mode[[:space:]]*$' > /dev/null; then
+        echo "Robust mode enabled (merge request description checkbox)"
+        export BENCHMARK_ARGS="${BENCHMARK_ARGS} --robust"
+      fi
+
+# PyTorch comparison of the modules benchmark: disabled only by an explicitly unchecked "Run benchmarks against
+# PyTorch" checkbox of the merge request description (a description without the checkbox keeps it enabled)
+.benchmark-pytorch-comparison:
+  before_script:
+    - |
+      if printf '%s\n' "${CI_MERGE_REQUEST_DESCRIPTION:-}" \
+          | grep -E '^[[:space:]]*[-*+][[:space:]]*\[[[:space:]]\][[:space:]]+Run benchmarks against PyTorch[[:space:]]*$' > /dev/null; then
+        echo "PyTorch comparison disabled (merge request description checkbox)"
+        export BENCHMARK_ARGS="${BENCHMARK_ARGS} --no-pytorch"
+      fi
+
 # Base of the benchmark jobs: each job sets the execution mode (BENCHMARK_ARGS) and its own output directory
 .benchmark-modules:
   stage: benchmark
@@ -171,6 +232,9 @@ test-docs:
     # the baseline implementation is exported from the baseline branch (not fetched by merge request pipelines),
     # fetched as a local branch so that the report columns are labeled with its name (e.g. "Forward vs develop")
     - git fetch --quiet --depth=1 origin "+${BENCHMARK_BASELINE_REF}:${BENCHMARK_BASELINE_REF}"
+    - !reference [.benchmark-description-check, before_script]
+    - !reference [.benchmark-pytorch-comparison, before_script]
+    - !reference [.benchmark-robust-mode, before_script]
   script:
     - python -m benchmarks.benchmark_modules
         --baseline-ref "${BENCHMARK_BASELINE_REF}"
@@ -181,22 +245,8 @@ test-docs:
     when: always
     expire_in: 30 days
   rules:
-    # merge requests: run the benchmark only for the merge requests
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      changes:
-        - warp_nn/**/*
-        - benchmarks/**/*
-        - pyproject.toml
-        - .gitlab-ci.yml
-    # direct commits to the main branches: available on demand (manual), without blocking the pipeline
-    - if: $CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"
-      changes:
-        - warp_nn/**/*
-        - benchmarks/**/*
-        - pyproject.toml
-        - .gitlab-ci.yml
-      when: manual
-      allow_failure: true
+    - !reference [.benchmark-rules, merge-request-changes]
+    - !reference [.benchmark-rules, manual-on-main-branches]
 
 # Eager mode (includes the host/launch overhead)
 benchmark-modules-eager:
@@ -218,6 +268,10 @@ benchmark-modules-cuda-graph:
   variables:
     BENCHMARK_OUTPUT_DIR: benchmark-results-cuda-graph
     BENCHMARK_ARGS: "--cuda-graph"
+  rules:
+    # merge requests: opt-in ("Run CUDA-graph benchmarks" checkbox), regardless of the changed files
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run CUDA-graph benchmarks[ \t]*(\r?\n|$)/'
+    - !reference [.benchmark-rules, manual-on-main-branches]
   artifacts:
     expose_as: "Modules benchmark - CUDA graph"
     paths:
@@ -226,13 +280,15 @@ benchmark-modules-cuda-graph:
       - benchmark-results-cuda-graph/benchmark_modules.json
       - benchmark-results-cuda-graph/benchmark_modules.csv
 
-# Newton actuator networks vs PyTorch (network inference only).
+# Newton actuator networks vs PyTorch (network inference only)
 .benchmark-newton-networks:
   extends: .benchmark-modules
   before_script:
     - nvidia-smi
     - pip install --upgrade pip
     - pip install -e .[tests]
+    - !reference [.benchmark-description-check, before_script]
+    - !reference [.benchmark-robust-mode, before_script]
   script:
     - python -m benchmarks.benchmark_newton_networks
         --device cuda:0
@@ -244,6 +300,10 @@ benchmark-newton-networks-eager:
   extends: .benchmark-newton-networks
   variables:
     BENCHMARK_OUTPUT_DIR: benchmark-results-newton-eager
+  rules:
+    # merge requests: opt-in ("Run Newton benchmarks" checkbox), regardless of the changed files
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run Newton benchmarks[ \t]*(\r?\n|$)/'
+    - !reference [.benchmark-rules, manual-on-main-branches]
   artifacts:
     expose_as: "Newton networks benchmark - eager"
     paths:
@@ -257,6 +317,10 @@ benchmark-newton-networks-cuda-graph:
   variables:
     BENCHMARK_OUTPUT_DIR: benchmark-results-newton-cuda-graph
     BENCHMARK_ARGS: "--cuda-graph"
+  rules:
+    # merge requests: opt-in ("Run Newton benchmarks" and "Run CUDA-graph benchmarks" checkboxes)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run Newton benchmarks[ \t]*(\r?\n|$)/ && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run CUDA-graph benchmarks[ \t]*(\r?\n|$)/'
+    - !reference [.benchmark-rules, manual-on-main-branches]
   artifacts:
     expose_as: "Newton networks benchmark - CUDA graph"
     paths:

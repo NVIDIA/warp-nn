@@ -129,6 +129,11 @@ def test_to_markdown_without_device_specifications():
     assert not any(line.startswith(("- **GPU:**", "- **CPU:**")) for line in lines)
 
 
+def test_to_markdown_with_pytorch():
+    report = _report.to_markdown(_results()[:1], METADATA)
+    assert "TF32" in report and "not benchmarked" not in report
+
+
 def test_to_markdown_without_baseline():
     metadata = {**METADATA, "baseline_ref": None, "baseline_commit": None}
     report = _report.to_markdown(_results()[:1], metadata)
@@ -136,6 +141,27 @@ def test_to_markdown_without_baseline():
     assert "| Module | Batch size | Forward vs PyTorch | Backward vs PyTorch |" in report
     assert "vs baseline" not in report
     assert "not benchmarked" in report
+
+
+def test_to_markdown_without_pytorch():
+    metadata = {**METADATA, "pytorch": False}
+    report = _report.to_markdown(_results()[:1], metadata)
+    # no PyTorch columns
+    assert "| Module | Batch size | Forward vs develop | Backward vs develop |" in report
+    assert "vs PyTorch" not in report
+    assert "- **PyTorch:** not benchmarked" in report
+    assert "TF32" not in report
+    # (results without PyTorch timings) the cells of the baseline are unaffected
+    result = _results()[0]
+    result.timings = {pass_: {k: v for k, v in t.items() if k != "torch"} for pass_, t in result.timings.items()}
+    result.comparisons = {
+        pass_: {k: v for k, v in c.items() if k != "torch"} for pass_, c in result.comparisons.items()
+    }
+    html = _report.to_html([result], metadata)
+    assert "Forward vs develop" in html and "vs PyTorch" not in html and "TF32" not in html
+    rows = list(csv.DictReader(io.StringIO(_report.to_csv([result], metadata))))
+    assert rows[0]["torch_median_us"] == "" and rows[0]["speedup_vs_torch"] == ""
+    assert float(rows[0]["speedup_vs_baseline"]) == pytest.approx(1.004)
 
 
 def test_to_json():

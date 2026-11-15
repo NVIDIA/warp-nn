@@ -151,6 +151,7 @@ def collect_metadata(args: argparse.Namespace, *, date: str, baseline_commit: st
             f"warp-nn {warp_nn.__version__}, Warp {wp.__version__}, PyTorch {torch.__version__}, "
             f"Python {platform.python_version()}"
         ),
+        "pytorch": not args.no_pytorch,
         "allow_tf32": not args.disable_tf32,
         "robust": args.robust,
         "batch_sizes": args.batch_sizes,
@@ -195,6 +196,14 @@ def parse_args(
     group.add_argument(
         "--no-baseline", action="store_true", default=no_baseline, help="do not benchmark the baseline implementation"
     )
+    # without a baseline (e.g. disabled by default), PyTorch is the only reference, so it cannot be skipped
+    parser.set_defaults(no_pytorch=False)
+    if not no_baseline:
+        group.add_argument(
+            "--no-pytorch",
+            action="store_true",
+            help="do not benchmark the PyTorch counterparts (e.g. only vs the baseline)",
+        )
     group.add_argument("--device", default="cuda:0" if wp.is_cuda_available() else "cpu", help="device")
     group.add_argument("--cuda-graph", action="store_true", help="replay captured CUDA graphs (no host overhead)")
     group.add_argument(
@@ -248,6 +257,8 @@ def parse_args(
         args.instance_sets = ROBUST_INSTANCE_SETS if args.robust else 2
     if args.instance_sets < 1:
         parser.error("--instance-sets must be positive")
+    if args.no_pytorch and args.no_baseline:
+        parser.error("--no-pytorch requires the baseline (there would be nothing to compare against)")
     if args.robust and args.instance_sets < 2:
         parser.error("--robust requires at least 2 instance sets (to average out the randomized placements)")
     if args.min_sample_time <= 0.0 or args.max_time <= 0.0:
@@ -369,6 +380,7 @@ def _main(
                         seed=args.seed,
                         instance_sets=args.instance_sets,
                         randomize_placement=args.robust,
+                        pytorch=not args.no_pytorch,
                     )
                 except Exception as e:  # unexpected failure: report it and keep benchmarking the other modules
                     result = Result(spec.category, spec.name, batch_size, spec.differentiable)

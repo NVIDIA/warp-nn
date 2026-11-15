@@ -94,6 +94,23 @@ def test_run_benchmark():
         assert set(result.comparisons[pass_]) == {"torch", BASELINE}
 
 
+def test_run_benchmark_without_pytorch():
+    result = run_benchmark(
+        _SPECS["ReLU"],
+        2,
+        implementations={CURRENT: nn, BASELINE: nn},
+        device=DEVICE,
+        cuda_graph=False,
+        timing=FAST_TIMING,
+        statistics=StatisticsConfig(),
+        pytorch=False,
+    )
+    assert not result.errors
+    for pass_ in ("forward", "backward"):
+        assert set(result.timings[pass_]) == {CURRENT, BASELINE}
+        assert set(result.comparisons[pass_]) == {BASELINE}
+
+
 def test_run_benchmark_unavailable_baseline():
     # e.g. a module that does not exist in the baseline implementation
     result = run_benchmark(
@@ -223,6 +240,26 @@ def test_main_baseline_twice(tmp_path):
         assert not any("warp_nn_baseline_" in path for path in sys.path)
 
 
+def test_main_no_pytorch(tmp_path):
+    # the baseline (here, the committed version of the repository) is the only reference
+    argv = ["--modules", "Abs", "--batch-sizes", "2", "--baseline-ref", "HEAD", "--no-pytorch", *FAST_ARGS]
+    assert benchmark_modules.main([*argv, "--format", "json", "markdown", "--output-dir", str(tmp_path)]) == 0
+    data = json.loads((tmp_path / "benchmark_modules.json").read_text())
+    assert data["metadata"]["pytorch"] is False
+    assert set(data["results"][0]["timings"]["forward"]) == {"current", "baseline"}
+    assert set(data["results"][0]["comparisons"]["forward"]) == {"baseline"}
+    report = (tmp_path / "benchmark_modules.md").read_text()
+    assert "Forward vs HEAD" in report and "vs PyTorch" not in report
+
+
+def test_parse_args_no_pytorch_without_default_baseline(capsys):
+    # without a baseline by default (e.g. the networks benchmark), PyTorch is the only reference
+    assert benchmark_modules.parse_args(["--device", DEVICE], no_baseline=True).no_pytorch is False
+    with pytest.raises(SystemExit):
+        benchmark_modules.parse_args(["--no-pytorch", "--device", DEVICE], no_baseline=True)
+    assert "unrecognized arguments: --no-pytorch" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "argv, message",
     [
@@ -238,6 +275,7 @@ def test_main_baseline_twice(tmp_path):
         (["--output-name", "a/b"], "must be a file name"),
         (["--instance-sets", "0"], "--instance-sets must be positive"),
         (["--robust", "--instance-sets", "1"], "--robust requires at least 2 instance sets"),
+        (["--no-pytorch", "--no-baseline"], "--no-pytorch requires the baseline"),
     ],
 )
 def test_parse_args_invalid_values(capsys, argv, message):

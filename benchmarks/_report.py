@@ -55,10 +55,15 @@ def _labels(metadata: dict[str, Any]) -> dict[str, str]:
     return {TORCH: "PyTorch", CURRENT: "warp-nn", BASELINE: metadata.get("baseline_ref") or "baseline"}
 
 
+def _pytorch_benchmarked(metadata: dict[str, Any]) -> bool:
+    return bool(metadata.get("pytorch", True))  # reports of older versions (without the key) always benchmarked it
+
+
 def _columns(metadata: dict[str, Any]) -> list[tuple[str, str, str]]:
-    # (pass, reference implementation, header) of each speedup column (without the baseline if not benchmarked)
+    # (pass, reference implementation, header) of each speedup column (without the references not benchmarked)
     labels = _labels(metadata)
-    references = [ref for ref in REFERENCES if ref != BASELINE or metadata.get("baseline_ref")]
+    benchmarked = {TORCH: _pytorch_benchmarked(metadata), BASELINE: bool(metadata.get("baseline_ref"))}
+    references = [ref for ref in REFERENCES if benchmarked[ref]]
     return [(pass_, ref, f"{pass_.capitalize()} vs {labels[ref]}") for ref in references for pass_ in PASSES]
 
 
@@ -138,16 +143,19 @@ def _metadata_lines(metadata: dict[str, Any]) -> list[tuple[str, str]]:
         lines.append(("GPU", metadata["gpu"]))
     if metadata.get("cpu"):
         lines.append(("CPU", metadata["cpu"]))
-    return lines + [
+    lines += [
         ("Date", metadata.get("date", "")),
         ("Mode", "CUDA graph" if metadata.get("cuda_graph") else "eager"),
         ("Device", f"{metadata.get('device', '')} ({metadata.get('device_name', '')})"),
         ("warp-nn (current)", current),
         ("warp-nn (baseline)", baseline),
         ("Versions", metadata.get("versions", "")),
-        ("TF32 (PyTorch)", "allowed" if metadata.get("allow_tf32") else "disabled"),
-        ("Timing", metadata.get("timing", "")),
     ]
+    if _pytorch_benchmarked(metadata):
+        lines.append(("TF32 (PyTorch)", "allowed" if metadata.get("allow_tf32") else "disabled"))
+    else:
+        lines.append(("PyTorch", "not benchmarked"))
+    return lines + [("Timing", metadata.get("timing", ""))]
 
 
 def _legend(metadata: dict[str, Any]) -> str:

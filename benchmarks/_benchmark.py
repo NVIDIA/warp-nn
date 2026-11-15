@@ -152,8 +152,9 @@ def run_benchmark(
     seed: int = 0,
     instance_sets: int = 2,
     randomize_placement: bool = False,
+    pytorch: bool = True,
 ) -> Result:
-    """Benchmark a module, for a batch size, against its PyTorch counterpart and the other warp-nn implementations.
+    """Benchmark a module, for a batch size, against its PyTorch counterpart (optional) and the other warp-nn implementations.
 
     :param spec: The module specification.
     :param batch_size: The batch size.
@@ -171,6 +172,8 @@ def run_benchmark(
     :param randomize_placement: Whether to randomize the memory placement of the instances (with randomly sized
         padding blocks allocated before building them), so that placement effects average out over the instance sets
         (which should then be several) rather than biasing the comparisons systematically.
+    :param pytorch: Whether to benchmark the PyTorch counterpart (reference). If false, the current implementation
+        is only compared against the other warp-nn implementations (e.g. the baseline).
 
     :return: The benchmark result.
 
@@ -180,7 +183,9 @@ def run_benchmark(
         raise ValueError(f"The number of instance sets must be positive (got {instance_sets})")
     result = Result(category=spec.category, module=spec.name, batch_size=batch_size, differentiable=spec.differentiable)
     arrays = spec.sample_inputs(batch_size, np.random.default_rng(seed))
-    builders = {TORCH: functools.partial(build_torch_runner, spec, arrays, device=device, cuda_graph=cuda_graph)}
+    builders = {}
+    if pytorch:
+        builders[TORCH] = functools.partial(build_torch_runner, spec, arrays, device=device, cuda_graph=cuda_graph)
     for name, nn in implementations.items():
         builders[name] = functools.partial(build_warp_runner, spec, nn, arrays, device=device, cuda_graph=cuda_graph)
     # build several instances of each implementation (instance sets), in alternating orders, and pool their
@@ -188,10 +193,11 @@ def run_benchmark(
     # make an instance a few percent slower than an identical one) average out. Building the runners executes the
     # passes once (warmup execution), which compiles/loads the kernels and allocates the cached arrays, so that none
     # of it is timed
-    # PyTorch is built first, and the order of the warp-nn implementations is reversed in every other set, so that
-    # they swap their positions and neighbors (mirroring the whole order would keep the middle one in place)
+    # PyTorch (if benchmarked) is built first, and the order of the warp-nn implementations is reversed in every other
+    # set, so that they swap their positions and neighbors (mirroring the whole order would keep the middle one in place)
     warp_names = list(implementations)
-    orders = [[TORCH, *(warp_names if i % 2 == 0 else warp_names[::-1])] for i in range(instance_sets)]
+    torch_names = [TORCH] if pytorch else []
+    orders = [[*torch_names, *(warp_names if i % 2 == 0 else warp_names[::-1])] for i in range(instance_sets)]
     instances: list[dict[str, Runner]] = [{} for _ in orders]
     failures: list[dict[str, str]] = [{} for _ in orders]
     start = time.perf_counter()

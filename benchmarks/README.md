@@ -31,7 +31,8 @@ python -m benchmarks.benchmark_modules --help
 ```
 
 The baseline git reference must exist locally (`git fetch origin develop:develop` in CI, or use `--baseline-ref
-origin/develop`). Use `--no-baseline` to compare against PyTorch only.
+origin/develop`). Use `--no-baseline` to compare against PyTorch only, or `--no-pytorch` to compare against the
+baseline only (e.g. to check a performance regression faster).
 
 ### Report
 
@@ -44,6 +45,8 @@ implementation:
 | Backward vs PyTorch | PyTorch backward pass is the baseline (1x) |
 | Forward vs develop | baseline warp-nn forward pass is the baseline (1x) |
 | Backward vs develop | baseline warp-nn backward pass is the baseline (1x) |
+
+The columns of a reference that is not benchmarked (`--no-pytorch` or `--no-baseline`) are omitted.
 
 `> 1x` means that the current warp-nn implementation is faster. A `~` marks differences that are not significant
 (the confidence interval includes 1x, the difference is below `--min-effect` (2% by default), or the instance sets
