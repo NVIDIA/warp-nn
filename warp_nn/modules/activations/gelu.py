@@ -22,30 +22,52 @@ from warp_nn.modules.module import Module
 from warp_nn.utils import resolve_dim
 
 
+@wp.func
+def _promote(x: wp.float16):
+    return wp.float32(x)
+
+
+@wp.func
+def _promote(x: wp.float32):
+    return x
+
+
+@wp.func
+def _promote(x: wp.float64):
+    return x
+
+
+@wp.func
+def _exact_gelu(x: Any):
+    # 0.5 * x * (1 + erf(x / sqrt(2))), rewritten with erfc to avoid the cancellation for negative x
+    return x.dtype(0.5) * x * wp.erfc(x * x.dtype(-0.7071067811865476))
+
+
+@wp.func
+def _tanh_gelu(x: Any):
+    # 0.5 * x * (1 + tanh(z)) with z = sqrt(2 / pi) * (x + 0.044715 * x^3), which saturates (to x or 0)
+    # for |x| > 10. Saturating explicitly avoids overflowing x^3 (for huge inputs), which yields NaN gradients
+    if x > x.dtype(10.0):
+        return x
+    if x < x.dtype(-10.0):
+        return x * x.dtype(0.0)
+    # 0.5 * (1 + tanh(z)) = sigmoid(2 z), computed without cancellation (nor overflowing exp()) for negative z
+    z = x.dtype(1.5957691216057308) * (x + x.dtype(0.044715) * x * x * x)
+    if z < x.dtype(0.0):
+        e = wp.exp(z)
+        return x * e / (x.dtype(1.0) + e)
+    return x / (x.dtype(1.0) + wp.exp(-z))
+
+
 def _create_function(*, approximate: str):
-    if approximate == "tanh":
+    gelu = _tanh_gelu if approximate == "tanh" else _exact_gelu
 
-        @wp.func
-        def function(x: Any):
-            # 0.5 * x * (1 + tanh(z)) with z = sqrt(2 / pi) * (x + 0.044715 * x^3), which saturates (to x or 0)
-            # for |x| > 10. Saturating explicitly avoids overflowing x^3 (in half precision), which yields NaN gradients
-            if x > x.dtype(10.0):
-                return x
-            if x < x.dtype(-10.0):
-                return x * x.dtype(0.0)
-            # 0.5 * (1 + tanh(z)) = sigmoid(2 z), computed without cancellation (nor overflowing exp()) for negative z
-            z = x.dtype(1.5957691216057308) * (x + x.dtype(0.044715) * x * x * x)
-            if z < x.dtype(0.0):
-                e = wp.exp(z)
-                return x * e / (x.dtype(1.0) + e)
-            return x / (x.dtype(1.0) + wp.exp(-z))
-
-    else:
-
-        @wp.func
-        def function(x: Any):
-            # 0.5 * x * (1 + erf(x / sqrt(2))), rewritten with erfc to avoid the cancellation for negative x
-            return x.dtype(0.5) * x * wp.erfc(x * x.dtype(-0.7071067811865476))
+    @wp.func
+    def function(x: Any):
+        # half precision inputs are computed in single precision: otherwise, adjoints such as x * upstream overflow
+        # to infinity (for large inputs or upstream gradients) and are multiplied by underflowed (zero) derivatives
+        # (e.g., of erfc() or exp()), yielding NaN gradients
+        return x.dtype(wp.static(gelu)(_promote(x)))
 
     return function
 

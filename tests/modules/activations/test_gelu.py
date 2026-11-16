@@ -103,5 +103,25 @@ def test_extreme_values(capsys, device, dtype, approximate):
     np.testing.assert_allclose(warp_input.grad.numpy(), torch_input.grad.numpy(), rtol=grad_rtol, atol=atol)
 
 
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_large_upstream_gradients(capsys, device, approximate):
+    if not is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # half precision upstream gradients (e.g., loss scaling) whose product with the input overflows
+    array = np.array([-60000, -39, -20, -9, -6, -3, 0, 3, 6, 9, 20, 60000], dtype=np.float16)
+    upstream = np.full_like(array, 30000)
+    torch_input = torch.tensor(array, dtype=torch.float64, requires_grad=True)
+    torch_output = torch.nn.functional.gelu(torch_input, approximate=approximate)
+    (torch_output * torch.tensor(upstream, dtype=torch.float64)).sum().backward()
+    warp_input = wp.array(array, dtype=wp.float16, device=device, requires_grad=True)
+    tape = wp.Tape()
+    with tape:
+        warp_output = nn.GELU(approximate=approximate).to(device)(warp_input)
+    tape.backward(grads={warp_output: wp.array(upstream, dtype=wp.float16, device=device)})
+    expected = torch_input.grad.numpy().astype(np.float16)
+    np.testing.assert_allclose(warp_input.grad.numpy(), expected, rtol=5e-3, atol=1e-3)
+
+
 def test_unsupported_input(capsys):
     check_unsupported_input(warp_activation=nn.GELU())
