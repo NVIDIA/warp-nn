@@ -18,7 +18,7 @@ import pytest
 import numpy as np
 import warp as wp
 
-from warp_nn.optimizers import SGD
+from warp_nn.optimizers import SGD, Adam
 
 from .. import utilities
 
@@ -111,3 +111,36 @@ def test_clip_by_total_norm_external_capture(capsys):
         wp.capture_launch(capture.graph)
         expected = [wp.array(gradient) for gradient in _clip(gradients, 0.5)]
         utilities.check_arrays(expected, optimizer.gradients, flatten=True, atol=1e-5, msg=f"replay {i + 1}/2")
+
+
+@pytest.mark.parametrize("max_norm", [None, 1.0])
+@pytest.mark.parametrize("disable_graph", [True, False])
+@pytest.mark.parametrize("optimizer_class", [Adam, SGD])
+def test_step_single_block_dim(capsys, optimizer_class, disable_graph, max_norm):
+    device = "cuda"
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+
+    # all the kernels of the optimization step (and of the gradient clipping) must be launched with the same block
+    # dimension: Warp loads (compiles) the whole module once per block dimension, and compiling the tiled kernels for
+    # other block dimensions (e.g. 1) is extremely slow on CUDA.
+    # Note: it relies on Warp internals (`Module.execs`, keyed by (context, block_dim), and `Module.unload`)
+    parameters = _create_parameters([utilities.sample_array(shape=(10, 20))], device)
+    optimizer = optimizer_class(parameters, max_norm=max_norm, device=device, disable_graph=disable_graph)
+    kernels = [optimizer._kernel_increase_timestep, optimizer._kernel_step]
+    if max_norm is not None:
+        kernels += [optimizer._kernel_sum_squares, optimizer._kernel_clip_by_total_norm]
+    modules = list({id(kernel.module): kernel.module for kernel in kernels}.values())
+    if not all(isinstance(getattr(module, "execs", None), dict) and hasattr(module, "unload") for module in modules):
+        pytest.skip("Warp's `Module.execs` or `Module.unload` is not available")
+    # unload the modules, so that only what this step loads is checked (the modules are shared by the whole session)
+    for module in modules:
+        module.unload()
+    optimizer.step()
+    context = wp.get_device(device).context
+    for module in modules:
+        try:
+            block_dims = {block_dim for ctx, block_dim in module.execs if ctx == context}
+        except (TypeError, ValueError):
+            pytest.skip("Unexpected layout of Warp's `Module.execs` keys")
+        assert block_dims == {optimizer._config.block_dim}, f"module: {module.name}"

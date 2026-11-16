@@ -1,9 +1,11 @@
 ## CI options
 
 <!-- Kept first: the CI only sees the first 2700 characters of the description. After editing a box, run a new
-pipeline. Keep the labels unchanged (matched by .gitlab-ci.yml). Newton always compares against PyTorch. -->
+pipeline. Keep the labels unchanged (matched by .gitlab-ci.yml). Newton always compares against PyTorch.
+With both "against baseline" and "against PyTorch" unchecked, no benchmark runs. -->
 
-- [x] Run benchmarks against PyTorch
+- [x] Run benchmarks against baseline
+- [ ] Run benchmarks against PyTorch
 - [ ] Run benchmarks in robust mode
 - [ ] Run CUDA-graph benchmarks
 - [ ] Run Newton benchmarks

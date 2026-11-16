@@ -68,6 +68,11 @@ where = ["."]
 include = ["warp_nn*"]
 
 
+[tool.coverage.run]
+relative_files = true  # combine coverage data of the CI test jobs
+source = ["warp_nn"]
+
+
 [tool.black]
 line-length = 120
 extend-exclude = """

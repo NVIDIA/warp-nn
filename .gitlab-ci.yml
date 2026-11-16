@@ -26,6 +26,7 @@ workflow:
 stages:
   - build
   - test
+  - coverage
   - benchmark
   - security
   - deploy
@@ -96,32 +97,59 @@ build-docs:
 # Test stage
 # ========================================================================================
 
-# Unit tests
+# Unit tests, split into parallel jobs to speed up the CI: one job for each of the slowest test folders and one job
+# for the remaining tests (all the tests except the folders of the other jobs, so that new tests are always run).
+# When adding a job for a folder, also add the folder to the --ignore options of the "other" job (otherwise its tests
+# run twice). PYTEST_ARGS is expanded unquoted by the shell, so it may hold several arguments.
 test-pytest:
   stage: test
   needs: []
   interruptible: true
+  # each job takes a few minutes: fail a stuck job (e.g. a runner that stopped responding) early and retry it once
+  timeout: 30m
+  retry:
+    max: 1
+    when:
+      - stuck_or_timeout_failure
+      - runner_system_failure
   image: python:${PYTHON_VERSION}
   tags:
     - os/linux
+  parallel:
+    matrix:
+      - TEST_SUITE: modules-activations
+        PYTEST_ARGS: "tests/modules/activations"
+      - TEST_SUITE: modules-layers
+        PYTEST_ARGS: "tests/modules/layers"
+      - TEST_SUITE: modules-operators
+        PYTEST_ARGS: "tests/modules/operators"
+      - TEST_SUITE: runtime
+        PYTEST_ARGS: "tests/runtime"
+      - TEST_SUITE: other  # all the remaining tests
+        PYTEST_ARGS: "tests
+          --ignore=tests/modules/activations
+          --ignore=tests/modules/layers
+          --ignore=tests/modules/operators
+          --ignore=tests/runtime"
+  variables:
+    # one coverage data file per job, combined by the coverage-report job
+    COVERAGE_FILE: .coverage.${TEST_SUITE}
   before_script:
     - pip install --upgrade pip
     - python -m pip install --quiet torch
     - pip install -e .[tests]
   script:
-    - pytest tests/
+    # the coverage percentage of each job is partial: the total is reported by the coverage-report job
+    - pytest ${PYTEST_ARGS}
         --junitxml=pytest-report.xml
-        --cov=warp_nn --cov-report=term --cov-report=xml:coverage.xml
-  # extract the total coverage percentage (from the terminal report) to display it in the MR
-  coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?%)$/'
+        --cov=warp_nn --cov-report=
   artifacts:
     when: always  # upload the reports even if tests fail
+    paths:
+      - .coverage.*  # coverage data, only used by the coverage-report job
     reports:
       junit: pytest-report.xml
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-    expire_in: 30 days
+    expire_in: 1 day
   only:
     - main
     - develop
@@ -146,18 +174,72 @@ test-docs:
   only:
     - merge_requests
 
+# ========================================================================================
+# Coverage stage
+# ========================================================================================
+
+# Combine the coverage of the test-pytest jobs and report the total coverage (in the MR) and the Cobertura report
+# (for the MR diff). It runs even if some tests failed, as long as all the jobs uploaded their coverage data
+coverage-report:
+  stage: coverage
+  needs:
+    - job: test-pytest
+      artifacts: true
+  when: always
+  interruptible: true
+  image: python:${PYTHON_VERSION}
+  tags:
+    - os/linux
+  before_script:
+    # toml: reads the coverage configuration from pyproject.toml (Python < 3.11)
+    - pip install --quiet "coverage[toml]>=7.10"
+  script:
+    # fail if a test-pytest job did not upload its coverage data (e.g. it failed before running the tests), rather
+    # than reporting a partial (falsely low) total coverage
+    - |
+      expected=$(grep -cE '^[[:space:]]*(-[[:space:]]*)?PYTEST_ARGS:' .gitlab-ci.yml)
+      found=$(ls .coverage.* 2>/dev/null | wc -l)
+      echo "Coverage data files: ${found} of ${expected}"
+      if [ "${found}" -ne "${expected}" ]; then
+        echo "ERROR: missing coverage data from some test-pytest jobs"
+        exit 1
+      fi
+    - coverage combine .coverage.*
+    - coverage report
+    - coverage xml -o coverage.xml
+  # extract the total coverage percentage (from the terminal report) to display it in the MR
+  coverage: '/^TOTAL.*\s+(\d+(?:\.\d+)?%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 30 days
+  only:
+    - main
+    - develop
+    - tags
+    - merge_requests
+
+# ========================================================================================
+# Benchmark stage
+# ========================================================================================
+
 # Benchmark the modules (vs PyTorch and vs the baseline branch) and expose the reports (HTML, Markdown, JSON and CSV)
 # in the merge request (exposed artifact). Report only: it does not block merging.
 # It runs on a GPU runner. In merge requests, the eager modules benchmark runs when the library, the benchmarks, the
 # project configuration or the CI configuration change; the checkboxes of the merge request description control the
 # other benchmarks and the options (see .gitlab/merge_request_templates/Default.md):
-#   - [x] Run benchmarks against PyTorch  -> compare the modules against PyTorch (checked by default in the template;
-#                                            only an unchecked box disables it, passing --no-pytorch). The Newton
-#                                            benchmark always compares against PyTorch (it has no baseline)
-#   - [x] Run benchmarks in robust mode   -> pass --robust to all the benchmarks (slower, randomized memory placement)
-#   - [x] Run CUDA-graph benchmarks       -> run the CUDA graph mode of the modules benchmark (and of the Newton
+#   - [x] Run benchmarks against baseline -> compare the modules against the baseline branch (checked by default in the
+#                                            template; only an unchecked box disables it, passing --no-baseline)
+#   - [ ] Run benchmarks against PyTorch  -> compare the modules against PyTorch (unchecked by default in the template;
+#                                            only an unchecked box disables it, passing --no-pytorch). With both
+#                                            boxes unchecked, no benchmark job runs (including the Newton ones).
+#                                            The Newton benchmark always compares against PyTorch (it has no baseline)
+#   - [ ] Run benchmarks in robust mode   -> pass --robust to all the benchmarks (slower, randomized memory placement)
+#   - [ ] Run CUDA-graph benchmarks       -> run the CUDA graph mode of the modules benchmark (and of the Newton
 #                                            benchmark, if enabled), regardless of the changed files
-#   - [x] Run Newton benchmarks           -> run the Newton actuator networks benchmark, regardless of the changed files
+#   - [ ] Run Newton benchmarks           -> run the Newton actuator networks benchmark, regardless of the changed files
 # The checkboxes are read when the pipeline is created: after editing the description, run a new pipeline.
 # GitLab only exposes the first 2700 characters of the description to the CI (the template lists the checkboxes first).
 # The rule regexes (RE2) and the grep patterns (ERE) below match the same "- [x] <label>" lines: keep them in sync.
@@ -165,6 +247,11 @@ test-docs:
 
 # Rule fragments of the benchmark jobs
 .benchmark-rules:
+  # merge requests with both comparisons disabled ("Run benchmarks against baseline" and "Run benchmarks against
+  # PyTorch" checkboxes explicitly unchecked): skip all the benchmark jobs (listed first in their rules)
+  no-comparison:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[ \t]\][ \t]+Run benchmarks against baseline[ \t]*(\r?\n|$)/ && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[ \t]\][ \t]+Run benchmarks against PyTorch[ \t]*(\r?\n|$)/'
+      when: never
   # merge requests that change the benchmarked code
   merge-request-changes:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -200,15 +287,28 @@ test-docs:
         export BENCHMARK_ARGS="${BENCHMARK_ARGS} --robust"
       fi
 
-# PyTorch comparison of the modules benchmark: disabled only by an explicitly unchecked "Run benchmarks against
-# PyTorch" checkbox of the merge request description (a description without the checkbox keeps it enabled)
-.benchmark-pytorch-comparison:
+# Comparisons of the modules benchmark, against the baseline branch and against PyTorch: each one is disabled only by
+# an explicitly unchecked "Run benchmarks against baseline" or "Run benchmarks against PyTorch" checkbox of the merge
+# request description (a description without the checkbox keeps it enabled). With both boxes unchecked, the benchmark
+# jobs are not created (see the no-comparison rule)
+.benchmark-comparisons:
   before_script:
     - |
-      if printf '%s\n' "${CI_MERGE_REQUEST_DESCRIPTION:-}" \
-          | grep -E '^[[:space:]]*[-*+][[:space:]]*\[[[:space:]]\][[:space:]]+Run benchmarks against PyTorch[[:space:]]*$' > /dev/null; then
-        echo "PyTorch comparison disabled (merge request description checkbox)"
-        export BENCHMARK_ARGS="${BENCHMARK_ARGS} --no-pytorch"
+      unchecked() {
+        printf '%s\n' "${CI_MERGE_REQUEST_DESCRIPTION:-}" \
+          | grep -E "^[[:space:]]*[-*+][[:space:]]*\[[[:space:]]\][[:space:]]+$1[[:space:]]*$" > /dev/null
+      }
+      if unchecked "Run benchmarks against baseline"; then
+        echo "Baseline comparison disabled (merge request description checkbox)"
+        export BENCHMARK_ARGS="${BENCHMARK_ARGS} --no-baseline"
+      else
+        # the baseline implementation is exported from the baseline branch (not fetched by merge request pipelines),
+        # fetched as a local branch so that the report columns are labeled with its name (e.g. "Forward vs develop")
+        git fetch --quiet --depth=1 origin "+${BENCHMARK_BASELINE_REF}:${BENCHMARK_BASELINE_REF}"
+        if unchecked "Run benchmarks against PyTorch"; then
+          echo "PyTorch comparison disabled (merge request description checkbox)"
+          export BENCHMARK_ARGS="${BENCHMARK_ARGS} --no-pytorch"
+        fi
       fi
 
 # Base of the benchmark jobs: each job sets the execution mode (BENCHMARK_ARGS) and its own output directory
@@ -229,11 +329,8 @@ test-docs:
     - pip install --upgrade pip
     - python -m pip install --quiet torch
     - pip install -e .[tests]
-    # the baseline implementation is exported from the baseline branch (not fetched by merge request pipelines),
-    # fetched as a local branch so that the report columns are labeled with its name (e.g. "Forward vs develop")
-    - git fetch --quiet --depth=1 origin "+${BENCHMARK_BASELINE_REF}:${BENCHMARK_BASELINE_REF}"
     - !reference [.benchmark-description-check, before_script]
-    - !reference [.benchmark-pytorch-comparison, before_script]
+    - !reference [.benchmark-comparisons, before_script]
     - !reference [.benchmark-robust-mode, before_script]
   script:
     - python -m benchmarks.benchmark_modules
@@ -245,6 +342,7 @@ test-docs:
     when: always
     expire_in: 30 days
   rules:
+    - !reference [.benchmark-rules, no-comparison]
     - !reference [.benchmark-rules, merge-request-changes]
     - !reference [.benchmark-rules, manual-on-main-branches]
 
@@ -269,6 +367,7 @@ benchmark-modules-cuda-graph:
     BENCHMARK_OUTPUT_DIR: benchmark-results-cuda-graph
     BENCHMARK_ARGS: "--cuda-graph"
   rules:
+    - !reference [.benchmark-rules, no-comparison]
     # merge requests: opt-in ("Run CUDA-graph benchmarks" checkbox), regardless of the changed files
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run CUDA-graph benchmarks[ \t]*(\r?\n|$)/'
     - !reference [.benchmark-rules, manual-on-main-branches]
@@ -301,6 +400,7 @@ benchmark-newton-networks-eager:
   variables:
     BENCHMARK_OUTPUT_DIR: benchmark-results-newton-eager
   rules:
+    - !reference [.benchmark-rules, no-comparison]
     # merge requests: opt-in ("Run Newton benchmarks" checkbox), regardless of the changed files
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run Newton benchmarks[ \t]*(\r?\n|$)/'
     - !reference [.benchmark-rules, manual-on-main-branches]
@@ -318,6 +418,7 @@ benchmark-newton-networks-cuda-graph:
     BENCHMARK_OUTPUT_DIR: benchmark-results-newton-cuda-graph
     BENCHMARK_ARGS: "--cuda-graph"
   rules:
+    - !reference [.benchmark-rules, no-comparison]
     # merge requests: opt-in ("Run Newton benchmarks" and "Run CUDA-graph benchmarks" checkboxes)
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run Newton benchmarks[ \t]*(\r?\n|$)/ && $CI_MERGE_REQUEST_DESCRIPTION =~ /(^|\n)[ \t]*[-*+][ \t]*\[[xX]\][ \t]+Run CUDA-graph benchmarks[ \t]*(\r?\n|$)/'
     - !reference [.benchmark-rules, manual-on-main-branches]

@@ -120,7 +120,9 @@ class Adam(Optimizer):
                     dim=1,
                     inputs=[self._timestep],
                     device=self._device,
-                    block_dim=1,
+                    # same block_dim as the tiled step kernel (same module): Warp compiles a module once per block_dim,
+                    # and compiling the tiled kernel with a block_dim of 1 is extremely slow on CUDA
+                    block_dim=self._config.block_dim,
                 )
                 for parameters, gradients, m1, m2 in zip(self._parameters, self._gradients, self._m1, self._m2):
                     wp.launch_tiled(
