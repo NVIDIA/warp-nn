@@ -8,6 +8,9 @@
 - Add the global cache (`warp_nn.utils.cache`), with functions to clear and disable/bypass it, where modules and
   ONNX runtime operations store their cached data, and the `cache` property to modules to access their own cache
 
+### Fixed
+- Fix `Module.load_state_dict()` partially loading arrays smaller than the module's arrays (it raises an error now)
+
 ## [0.4.1] - 2026-10-18
 ### Changed
 - Update default kernel configuration for tiles of 1024 elements

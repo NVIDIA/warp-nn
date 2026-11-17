@@ -184,6 +184,29 @@ def test_state_dict(capsys, device, modules: list[nn.Module]):
     )
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_load_state_dict(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    module = nn.Linear(4, 5).to(device)
+    weight, bias = module.weight.data.numpy(), module.bias.data.numpy()
+    # arrays with the same size are loaded (e.g. a bias with shape (5,) into the bias with shape (5, 1))
+    state = {"weight": np.arange(20, dtype=np.float32).reshape(5, 4), "bias": np.arange(5, dtype=np.float32)}
+    module.load_state_dict(state)
+    np.testing.assert_array_equal(module.weight.data.numpy(), state["weight"])
+    np.testing.assert_array_equal(module.bias.data.numpy(), state["bias"].reshape(5, 1))
+    module.load_state_dict({"weight": wp.array(weight, device=device), "bias": wp.array(bias, device=device)})
+    # arrays with a different size are not (partially) loaded, e.g. from a module with fewer output features
+    for other in [nn.Linear(4, 3), nn.Linear(4, 7)]:
+        for name, array in other.state_dict().items():
+            with pytest.raises(ValueError, match=f"'{name}'"):
+                module.load_state_dict({name: array})
+            with pytest.raises(ValueError, match=f"'{name}'"):
+                module.load_state_dict({name: array.numpy()})
+    np.testing.assert_array_equal(module.weight.data.numpy(), weight)
+    np.testing.assert_array_equal(module.bias.data.numpy(), bias)
+
+
 def test_config(capsys):
     # the default config is used outside of any context
     assert ModuleA().config == get_kernel_config()

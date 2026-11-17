@@ -311,13 +311,21 @@ class Module(ABC):
         :param state_dict: The state dictionary to load into the module.
 
         :raises NotImplementedError: If the state dictionary contains an unsupported type.
+        :raises ValueError: If an array in the state dictionary has a different size than the array it is loaded into.
         """
 
-        def _load_from_state_dict(dst, src):
+        def _load_from_state_dict(dst, src, name=""):
             if isinstance(src, dict):
                 for k in src:
-                    _load_from_state_dict(dst[k], src[k])
-            elif isinstance(src, wp.array):
+                    _load_from_state_dict(dst[k], src[k], k)
+                return
+            # the copy only requires arrays of the same size (e.g. a bias with shape (n,) can be loaded into (n, 1)),
+            # otherwise a smaller array would only overwrite the leading elements of the destination array
+            if isinstance(src, (wp.array, np.ndarray)) and src.size != dst.size:
+                raise ValueError(
+                    f"Unable to load '{name}' with shape {tuple(src.shape)} into an array with shape {tuple(dst.shape)}"
+                )
+            if isinstance(src, wp.array):
                 wp.copy(dst, src.to(dst.device))
             elif isinstance(src, np.ndarray):
                 wp.copy(dst, wp.array(src, dtype=dst.dtype, device=dst.device))
