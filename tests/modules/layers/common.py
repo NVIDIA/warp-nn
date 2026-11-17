@@ -129,6 +129,29 @@ def check_forward_rnn(
     utilities.check_arrays(torch_outputs, warp_outputs, rtol=rtol, atol=atol)
 
 
+def check_forward_rnn_cell_loop(*, warp_module, torch_module, device, batch_size: int, steps: int = 3):
+    # check the outputs of a recurrent cell against PyTorch over several time steps, where the outputs of each step
+    # are fed back as the hidden (and cell) states of the next one (e.g. `h = cell(x, h)`)
+    warp_module.to(device)
+    torch_module.to(device)
+    # init parameters to same values
+    utilities.init_parameters(torch_module.parameters())
+    utilities.init_parameters(warp_module.parameters(as_array=True))
+    # initial states (hidden state and, for LSTM, cell state)
+    shape = (batch_size, torch_module.hidden_size)
+    num_states = 2 if isinstance(torch_module, torch.nn.LSTMCell) else 1
+    torch_hidden = tuple(torch.zeros(shape, device=device) for _ in range(num_states))
+    warp_hidden = tuple(wp.zeros(shape, dtype=wp.float32, device=device) for _ in range(num_states))
+    for step in range(steps):
+        array = utilities.sample_array([batch_size, torch_module.input_size])
+        torch_input, warp_input = torch.tensor(array, device=device), wp.array(array, device=device)
+        with torch.no_grad():
+            torch_hidden = torch_module(torch_input, torch_hidden[0] if num_states == 1 else torch_hidden)
+        warp_hidden = warp_module(warp_input, warp_hidden[0] if num_states == 1 else warp_hidden)
+        torch_hidden, warp_hidden = tuple(_flatten(torch_hidden)), tuple(_flatten(warp_hidden))
+        utilities.check_arrays(torch_hidden, warp_hidden, msg=f"time step {step + 1}/{steps}")
+
+
 def check_gradients_rnn(
     *,
     warp_module,

@@ -20,7 +20,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, resolve_dim
 
-from ._common import tile_transposed_gemm_2d
+from ._common import copy_if_output, tile_transposed_gemm_2d
 
 
 def _create_kernels(config: KernelConfig, *, include_bias: bool):
@@ -170,6 +170,8 @@ class RNNCell(Module):
         output = self.cache.get(
             key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         )
+        # the hidden state can be the output of a previous call (e.g. `h = cell(x, h)`)
+        hidden = copy_if_output(hidden, (output,), cache=self.cache, key=("hidden", key))
         # launch kernel
         wp.launch_tiled(
             self._kernel,

@@ -8,6 +8,10 @@
 - Add the global cache (`warp_nn.utils.cache`), with functions to clear and disable/bypass it, where modules and
   ONNX runtime operations store their cached data, and the `cache` property to modules to access their own cache
 
+### Fixed
+- Fix wrong outputs of `RNNCell`, `GRUCell` and `LSTMCell` when the outputs of a call are fed back as the states
+  of the next call (e.g. `h = cell(x, h)`) and the states are larger than a tile
+
 ## [0.4.1] - 2026-10-18
 ### Changed
 - Update default kernel configuration for tiles of 1024 elements
