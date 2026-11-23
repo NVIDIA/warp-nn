@@ -15,11 +15,13 @@
 
 from typing import Any
 
+from functools import partial
+
 import warp as wp
 
-from warp_nn.modules._common import INT_DTYPES, create_unary_kernels
+from warp_nn.modules._impl.kernel_factory import INT_DTYPES, OverloadedKernels, create_unary_kernels
 from warp_nn.modules.module import Module
-from warp_nn.utils import resolve_dim
+from warp_nn.utils import KernelConfig, resolve_dim
 
 
 def _create_function():
@@ -28,6 +30,13 @@ def _create_function():
         return x
 
     return function
+
+
+def _create_kernels(*, config: KernelConfig, function: wp.Function) -> OverloadedKernels:
+    # the integer kernels are created separately, since they are not differentiable
+    kernels = create_unary_kernels(config=config, function=function)
+    kernels |= create_unary_kernels(config=config, function=function, dtypes=INT_DTYPES)
+    return kernels
 
 
 class Concatenate(Module):
@@ -50,10 +59,7 @@ class Concatenate(Module):
         super().__init__(requires_grad=requires_grad)
         self._dim = int(dim)
         # runtime variables
-        # the integer kernels are created separately, since they are not differentiable
-        function = _create_function()
-        self._kernels = create_unary_kernels(config=self.config, function=function)
-        self._kernels |= create_unary_kernels(config=self.config, function=function, dtypes=INT_DTYPES)
+        self.kernels.factory = partial(_create_kernels, function=_create_function())
 
     @property
     def dim(self) -> int:
@@ -94,7 +100,8 @@ class Concatenate(Module):
                 )
         output_shape = shape[:dim] + (sum(other[dim] for other in shapes),) + shape[dim + 1 :]
         key = (output_shape, dtype)
-        kernel = self._kernels[(ndim, dtype)]
+        # raise TypeError if the input arrays are not supported
+        self.kernels.select(config=self.config.adapt(shape, self.device), key=(ndim, dtype))
         # cache output
         output = self.cache.get(
             key,
@@ -113,13 +120,15 @@ class Concatenate(Module):
             if input.size:
                 index = [slice(None)] * ndim
                 index[dim] = slice(offset, offset + size)
+                config = self.config.adapt(input_shape, self.device)
+                kernel = self.kernels.select(config=config, key=(ndim, dtype))
                 wp.launch_tiled(
                     kernel,
-                    dim=resolve_dim(config=self.config, shape=input_shape, tiled=True),
+                    dim=resolve_dim(config=config, shape=input_shape, tiled=True),
                     inputs=[input],
                     outputs=[output[tuple(index)]],
                     device=self.device,
-                    block_dim=self.config.block_dim,
+                    block_dim=config.block_dim,
                 )
             offset += size
         return output

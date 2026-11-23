@@ -15,9 +15,11 @@
 
 from typing import Any
 
+from functools import partial
+
 import warp as wp
 
-from warp_nn.modules._common import create_unary_kernels
+from warp_nn.modules._impl.kernel_factory import create_unary_kernels
 from warp_nn.modules.module import Module
 from warp_nn.utils import resolve_dim
 
@@ -49,7 +51,7 @@ class HardSwish(Module):
         """
         super().__init__(requires_grad=requires_grad)
         # runtime variables
-        self._kernels = create_unary_kernels(config=self.config, function=_create_function())
+        self.kernels.factory = partial(create_unary_kernels, function=_create_function())
 
     def __call__(self, input: wp.array) -> wp.array:
         """Forward pass of the activation function.
@@ -63,7 +65,8 @@ class HardSwish(Module):
         dtype = input.dtype
         shape = tuple(input.shape)
         key = (shape, dtype)
-        kernel = self._kernels[(len(shape), dtype)]
+        config = self.config.adapt(shape, self.device)
+        kernel = self.kernels.select(config=config, key=(len(shape), dtype))
         # cache output
         output = self.cache.get(
             key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
@@ -71,10 +74,10 @@ class HardSwish(Module):
         # launch kernel
         wp.launch_tiled(
             kernel,
-            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
+            dim=resolve_dim(config=config, shape=shape, tiled=True),
             inputs=[input],
             outputs=[output],
             device=self.device,
-            block_dim=self.config.block_dim,
+            block_dim=config.block_dim,
         )
         return output

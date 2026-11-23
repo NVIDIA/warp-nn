@@ -231,6 +231,26 @@ def test_cache(capsys, modules: list[nn.Module]):
         assert len(module.cache) == 0
 
 
+def test_kernels(capsys, modules: list[nn.Module]):
+    # the kernels are initialized by the base class, for every module
+    assert all(len(module.kernels) == 0 and module.kernels.factory is None for module in modules)
+    # the kernels created by a forward pass are kept when moving the module to another device
+    module = nn.ReLU().to("cpu")
+    config = module.config.adapt((2, 4), module.device)
+    assert config not in module.kernels
+    module(wp.ones((2, 4), dtype=wp.float32, device="cpu"))
+    assert config in module.kernels and len(module.kernels) == 1
+    kernel = module.kernels.select(config=config, key=(2, wp.float32))
+    if utilities.is_device_available("cuda"):
+        module.to("cuda")
+        assert module.kernels.select(config=config, key=(2, wp.float32)) is kernel and len(module.kernels) == 1
+        # ... and the module runs on the new device, creating kernels only for a new adapted configuration
+        output = module(wp.ones((2, 4), dtype=wp.float32, device="cuda"))
+        assert np.allclose(output.numpy(), 1.0)
+        cuda_config = module.config.adapt((2, 4), module.device)
+        assert cuda_config in module.kernels and len(module.kernels) == len({config, cuda_config})
+
+
 @pytest.mark.parametrize(
     "module_factory, shape",
     [

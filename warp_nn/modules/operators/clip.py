@@ -17,9 +17,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from functools import partial
+
 import warp as wp
 
-from warp_nn.modules._common import create_unary_kernels
+from warp_nn.modules._impl.kernel_factory import create_unary_kernels
 from warp_nn.modules.module import Module
 from warp_nn.utils import resolve_dim
 
@@ -62,8 +64,8 @@ class Clip(Module):
         self._min_val = None if min_val is None else float(min_val)
         self._max_val = None if max_val is None else float(max_val)
         # runtime variables
-        self._kernels = create_unary_kernels(
-            config=self.config,
+        self.kernels.factory = partial(
+            create_unary_kernels,
             function=_create_function(
                 min_val=float("-inf") if min_val is None else self._min_val,
                 max_val=float("inf") if max_val is None else self._max_val,
@@ -92,7 +94,8 @@ class Clip(Module):
         dtype = input.dtype
         shape = tuple(input.shape)
         key = (shape, dtype)
-        kernel = self._kernels[(len(shape), dtype)]
+        config = self.config.adapt(shape, self.device)
+        kernel = self.kernels.select(config=config, key=(len(shape), dtype))
         # cache output
         output = self.cache.get(
             key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
@@ -100,10 +103,10 @@ class Clip(Module):
         # launch kernel
         wp.launch_tiled(
             kernel,
-            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
+            dim=resolve_dim(config=config, shape=shape, tiled=True),
             inputs=[input],
             outputs=[output],
             device=self.device,
-            block_dim=self.config.block_dim,
+            block_dim=config.block_dim,
         )
         return output

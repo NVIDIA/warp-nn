@@ -13,19 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
+
 import warp as wp
 
 from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import KernelConfig, resolve_dim
+from warp_nn.utils import AdaptationPolicy, KernelConfig, resolve_dim
 
-from ._common import tile_transposed_gemm_2d
+from ._common import reduction_chunk, tile_transposed_gemm_2d
 
 
-def _create_kernels(config: KernelConfig, *, include_bias: bool):
+def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: int):
 
-    @wp.kernel(grid_stride=False)
+    @wp.kernel(grid_stride=False, module="unique")
     def kernel(
         input: wp.array2d[float],  # (batch_size, in_features)
         weight: wp.array2d[float],  # (out_features, in_features)
@@ -34,7 +36,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool):
     ):
         i, j = wp.tid()
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
-        out = wp.static(tile_transposed_gemm_2d(config.tile_2d))(weight, input, index=(i, j))
+        out = wp.static(tile_transposed_gemm_2d(config.tile_2d, residual_dim))(weight, input, index=(i, j))
         if wp.static(include_bias):
             shape_T = (wp.static(config.tile_2d[1]), wp.static(config.tile_2d[0]))
             shape_b = (wp.static(config.tile_2d[1]), 1)
@@ -119,7 +121,11 @@ class Linear(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._kernel = _create_kernels(self.config, include_bias=self.bias is not None)
+        self.kernels.factory = partial(
+            _create_kernels,
+            include_bias=self.bias is not None,
+            residual_dim=reduction_chunk(self.config, self.in_features),
+        )
 
     def _initialize_parameters(self):
         kaiming_uniform(self.weight.data, mode="scale", scale=1.0 / self.in_features)
@@ -141,13 +147,15 @@ class Linear(Module):
             key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
         )
         # launch kernel
+        config = self.config.adapt(shape, self.device, requires_grad=self.requires_grad, policy=AdaptationPolicy.LINEAR)
+        kernel = self.kernels.select(config=config)
         wp.launch_tiled(
-            self._kernel,
-            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
+            kernel,
+            dim=resolve_dim(config=config, shape=shape, tiled=True),
             inputs=[input, self.weight.data, self.bias.data if self.bias else None],
             outputs=[output],
             device=self.device,
-            block_dim=self.config.block_dim,
+            block_dim=config.block_dim,
         )
         return output
 

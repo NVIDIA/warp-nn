@@ -47,8 +47,8 @@ def log1p(x: Any):
     return x * (wp.log(w) / (w - x.dtype(1.0)))
 
 
-class Kernels(dict):
-    """Kernels indexed by ``(number of dimensions, data type)``, raising TypeError for unsupported inputs."""
+class OverloadedKernels(dict):
+    """Kernel overloads indexed by ``(number of dimensions, data type)``, raising TypeError for unsupported inputs."""
 
     def __missing__(self, key: tuple[int, type]):
         ndim, dtype = key
@@ -60,7 +60,7 @@ class Kernels(dict):
 
 def create_unary_kernels(
     *, config: KernelConfig, function: wp.Function, dtypes: Sequence[type] = FLOAT_DTYPES
-) -> Kernels:
+) -> OverloadedKernels:
     """Create the tiled kernels that apply an element-wise unary function: ``output = function(input)``.
 
     :param config: The kernel configuration (tile sizes).
@@ -97,12 +97,12 @@ def create_unary_kernels(
         tile = wp.tile_map(wp.static(function), wp.tile_load(input, shape=shape, offset=offset))
         wp.tile_store(output, tile, offset=offset)
 
-    return Kernels(overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d], dtypes=dtypes))
+    return OverloadedKernels(overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d], dtypes=dtypes))
 
 
 def create_binary_kernels(
     *, config: KernelConfig, function: wp.Function, dtypes: Sequence[type] = FLOAT_DTYPES
-) -> Kernels:
+) -> OverloadedKernels:
     """Create the tiled kernels that apply an element-wise binary function: ``output = function(a, b)``.
 
     :param config: The kernel configuration (tile sizes).
@@ -151,4 +151,4 @@ def create_binary_kernels(
         )
         wp.tile_store(output, tile, offset=offset)
 
-    return Kernels(overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d], dtypes=dtypes, num_arrays=3))
+    return OverloadedKernels(overload_kernels(kernels=[kernel_1d, kernel_2d, kernel_3d], dtypes=dtypes, num_arrays=3))

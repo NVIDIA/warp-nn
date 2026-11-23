@@ -15,6 +15,8 @@
 
 import warp as wp
 
+from warp_nn.utils import KernelConfig
+
 
 def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...]:
     if isinstance(value, (list, tuple)):
@@ -24,6 +26,20 @@ def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...
     elif isinstance(value, int):
         return (value,) * length
     raise TypeError(f"Expected a tuple or int, got {type(value)}")
+
+
+def reduction_chunk(config: KernelConfig, size: int) -> int:
+    """Get the size of the reduction (K) chunks of a layer's matrix multiplications.
+
+    It is the width of the configured tile (rather than of the adapted tiles, whose narrower widths would take more
+    reduction steps), up to :data:`_MAX_RESIDUAL_DIM`, or up to 8 for reduction sizes up to 8 (instead of zero-padding them to 16).
+
+    :param config: The layer's kernel configuration.
+    :param size: The largest reduction size (e.g. the input features) of the layer's matrix multiplications.
+
+    :return: The size of the reduction chunks.
+    """
+    return min(config.tile_2d[1], 8 if size <= 8 else _MAX_RESIDUAL_DIM)
 
 
 # Warp functions

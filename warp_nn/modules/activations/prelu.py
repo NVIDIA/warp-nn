@@ -15,9 +15,11 @@
 
 from typing import Any
 
+from functools import partial
+
 import warp as wp
 
-from warp_nn.modules._common import create_binary_kernels
+from warp_nn.modules._impl.kernel_factory import create_binary_kernels
 from warp_nn.modules.module import Module
 from warp_nn.utils import resolve_dim
 
@@ -52,7 +54,7 @@ class PReLU(Module):
         """
         super().__init__(requires_grad=requires_grad)
         # runtime variables
-        self._kernels = create_binary_kernels(config=self.config, function=_create_function())
+        self.kernels.factory = partial(create_binary_kernels, function=_create_function())
 
     def __call__(self, x: wp.array, slope: wp.array) -> wp.array:
         """Forward pass of the operation.
@@ -75,7 +77,8 @@ class PReLU(Module):
                 f"The input arrays must have the same data type (got {dtype.__name__} and {slope.dtype.__name__})"
             )
         key = (shape, dtype)
-        kernel = self._kernels[(len(shape), dtype)]
+        config = self.config.adapt(shape, self.device)
+        kernel = self.kernels.select(config=config, key=(len(shape), dtype))
         # cache output
         output = self.cache.get(
             key, lambda: wp.empty(shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
@@ -83,10 +86,10 @@ class PReLU(Module):
         # launch kernel
         wp.launch_tiled(
             kernel,
-            dim=resolve_dim(config=self.config, shape=shape, tiled=True),
+            dim=resolve_dim(config=config, shape=shape, tiled=True),
             inputs=[x, slope],
             outputs=[output],
             device=self.device,
-            block_dim=self.config.block_dim,
+            block_dim=config.block_dim,
         )
         return output

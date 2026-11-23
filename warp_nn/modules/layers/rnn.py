@@ -13,13 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
+
 import warp as wp
 
 from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
-from warp_nn.utils import copy, resolve_dim
+from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
 
+from ._common import reduction_chunk
 from .rnn_cell import _create_kernels
 
 
@@ -136,7 +139,11 @@ class RNN(Module):
         if initialize_parameters:
             self._initialize_parameters()
         # runtime variables
-        self._kernel = _create_kernels(self.config, include_bias=bias)
+        self.kernels.factory = partial(
+            _create_kernels,
+            include_bias=bias,
+            residual_dim=reduction_chunk(self.config, max(self.input_size, self._num_directions * self.hidden_size)),
+        )
 
     def _initialize_parameters(self):
         for parameter in self.parameters():
@@ -190,7 +197,11 @@ class RNN(Module):
         # launch kernels, one per layer, direction and time step
         # - each time step writes its hidden state to its own slice of the layer output array (rather than
         #   overwriting the same array), so that the tape can propagate the gradients through the sequence
-        dim = resolve_dim(config=self.config, shape=(batch_size, hidden_size), tiled=True)
+        config = self.config.adapt(
+            (batch_size, hidden_size), self.device, requires_grad=self.requires_grad, policy=AdaptationPolicy.MATMUL
+        )
+        kernel = self.kernels.select(config=config)
+        dim = resolve_dim(config=config, shape=(batch_size, hidden_size), tiled=True)
         layer_input = input
         for layer, layer_output in enumerate(outputs):
             for direction in range(num_directions):
@@ -201,7 +212,7 @@ class RNN(Module):
                 for t in reversed(range(sequence_length)) if direction else range(sequence_length):
                     output = layer_output[:, t, features]
                     wp.launch_tiled(
-                        self._kernel,
+                        kernel,
                         dim=dim,
                         inputs=[
                             layer_input[:, t],
@@ -213,7 +224,7 @@ class RNN(Module):
                         ],
                         outputs=[output],
                         device=self.device,
-                        block_dim=self.config.block_dim,
+                        block_dim=config.block_dim,
                     )
                     state = output
                 copy(state, output_hidden[index])

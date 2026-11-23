@@ -24,10 +24,11 @@ The cache can be cleared (see :py:func:`clear`), and disabled (see :py:func:`set
 
 from __future__ import annotations
 
-from typing import Any, Callable, Hashable, TypeVar
+from typing import Any, TypeVar
 
 import threading
 import weakref
+from collections.abc import Callable, Hashable
 
 
 __all__ = ["Cache", "acquire", "clear", "is_enabled", "set_enabled"]
@@ -71,11 +72,10 @@ class Cache:
         """
         if not _enabled:
             return factory()
-        try:
-            return self._entries[key]
-        except KeyError:
-            value = self._entries[key] = factory()
-            return value
+        # created outside an except clause, so that the factory errors are not chained to a KeyError
+        if key not in self._entries:
+            self._entries[key] = factory()
+        return self._entries[key]
 
     def values(self) -> list[Any]:
         """Get the cached data.

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 from warp_nn.utils import cache
-from warp_nn.utils.config import KernelConfig, get_kernel_config, kernel_config
+from warp_nn.utils.config import AdaptationPolicy, KernelConfig, get_kernel_config, kernel_config
 from warp_nn.utils.device import parse_device
 from warp_nn.utils.graph import ScopedCapture
 from warp_nn.utils.logging import logger

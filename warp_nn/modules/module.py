@@ -19,6 +19,7 @@ from typing import Any
 
 from abc import ABC
 from collections import OrderedDict
+from collections.abc import Callable, Hashable
 
 import numpy as np
 import warp as wp
@@ -26,6 +27,78 @@ import warp as wp
 from warp_nn.modules.buffer import Buffer
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import KernelConfig, cache, get_kernel_config, parse_device
+
+
+class Kernels:
+    def __init__(self) -> None:
+        """Kernels of a module by kernel configuration, created the first time a configuration is requested.
+
+        Instances are created by the modules (see :py:attr:`Module.kernels`), and should not be instantiated directly.
+        """
+        self._factory: Callable[..., Any] | None = None
+        self._entries: dict[KernelConfig, Any] = {}
+
+    def __contains__(self, config: KernelConfig) -> bool:
+        """Whether the kernels for a kernel configuration have been created.
+
+        :param config: Kernel configuration.
+
+        :return: Whether the kernels for the kernel configuration have been created.
+        """
+        return config in self._entries
+
+    def __repr__(self) -> str:
+        return f"Kernels(factory={self._factory!r}, configs={len(self._entries)})"
+
+    def __len__(self) -> int:
+        """Number of kernel configurations whose kernels have been created.
+
+        :return: The number of kernel configurations whose kernels have been created.
+        """
+        return len(self._entries)
+
+    @property
+    def factory(self) -> Callable[..., Any] | None:
+        """Kernel factory, or ``None`` if it has not been set.
+
+        It is a function that creates the kernels for a kernel configuration, called as ``factory(config=config)``
+        (bind its other arguments with :py:func:`functools.partial`). It should create them in unique Warp modules
+        (``@wp.kernel(module="unique")``), so that the kernels of each configuration compile on their own.
+        Setting it discards the kernels created by the previous factory (if any). Once set, it cannot be unset.
+
+        :raises TypeError: If the factory set is not callable.
+        """
+        return self._factory
+
+    @factory.setter
+    def factory(self, factory: Callable[..., Any]) -> None:
+        if not callable(factory):
+            raise TypeError(f"The kernel factory must be callable, got {type(factory).__name__}")
+        self._factory = factory
+        self._entries.clear()
+
+    def select(self, *, config: KernelConfig, key: Hashable | None = None) -> Any:
+        """Select the kernel for a kernel configuration, creating (and keeping) the kernels on first request.
+
+        Select the kernels with the configurations adapted to the launch shapes (see
+        :py:meth:`~warp_nn.utils.config.KernelConfig.adapt`), so that the launch shapes with the same adapted
+        configuration share them. If the factory creates a collection of kernels (e.g. kernel overloads indexed by
+        number of dimensions and data type), give the key of the kernel to select it from the collection.
+
+        :param config: Kernel configuration (usually adapted to the launch shape).
+        :param key: Key of the kernel in the collection created by the factory (e.g. ``(ndim, dtype)``), which must
+            then be subscriptable. If ``None``, what the factory created is returned.
+
+        :return: The kernel (or what the factory created, if no key is given) for the kernel configuration.
+
+        :raises RuntimeError: If the kernel factory has not been set.
+        """
+        if config not in self._entries:
+            if self._factory is None:
+                raise RuntimeError("The kernel factory has not been set")
+            self._entries[config] = self._factory(config=config)
+        kernels = self._entries[config]
+        return kernels if key is None else kernels[key]
 
 
 class Module(ABC):
@@ -48,6 +121,8 @@ class Module(ABC):
         self._requires_grad: bool = requires_grad
         if not hasattr(self, "_cache"):
             self._cache: cache.Cache = cache.acquire(self)  # idempotent: the same sub-cache for the same module
+        if not hasattr(self, "_kernels_by_config"):
+            self._kernels_by_config: Kernels = Kernels()
         if not hasattr(self, "_config"):
             self._config: KernelConfig = get_kernel_config()
         if not hasattr(self, "_device"):
@@ -101,6 +176,31 @@ class Module(ABC):
         which is cleared when the module is moved to another device.
         """
         return self._cache
+
+    @property
+    def kernels(self) -> Kernels:
+        """Kernels of the module by kernel configuration (see :py:class:`~warp_nn.modules.module.Kernels`).
+
+        The module sets its kernel factory (usually in the constructor), and selects its kernels for the
+        kernel configurations adapted to the launch shapes (see :py:meth:`~warp_nn.utils.config.KernelConfig.adapt`).
+        Unlike the data in :py:attr:`cache`, the kernels are kept when the cache is disabled or cleared,
+        and when the module is moved to another device.
+
+        .. note::
+
+            Not every built-in module uses it: the modules whose kernels are not adapted to the launch shapes (e.g. the
+            convolution, pooling and normalization layers) create their kernels on their own, and keep the kernel
+            factory unset.
+
+        .. code-block:: python
+
+            # constructor
+            self.kernels.factory = partial(create_kernels, include_bias=bias)
+            # forward pass
+            config = self.config.adapt(shape, self.device, policy=AdaptationPolicy.MATMUL)
+            kernel = self.kernels.select(config=config)
+        """
+        return self._kernels_by_config
 
     @property
     def device(self) -> wp.Device:

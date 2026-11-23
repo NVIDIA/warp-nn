@@ -32,3 +32,29 @@ def test_kernel_config(capsys):
         assert get_kernel_config() == dataclasses.replace(default, tile_2d=(16, 16))
     # exiting the outermost context restores the default values
     assert get_kernel_config() == default
+
+
+def test_kernel_config_adaptive(capsys):
+    assert get_kernel_config().adaptive is True
+    with kernel_config(adaptive=False):
+        assert get_kernel_config().adaptive is False
+        with kernel_config(block_dim=64):
+            # unspecified values are inherited from the enclosing context
+            assert get_kernel_config().adaptive is False
+        with kernel_config(adaptive=True):
+            assert get_kernel_config().adaptive is True
+        assert get_kernel_config().adaptive is False
+    assert get_kernel_config().adaptive is True
+
+
+def test_kernel_config_tiles_as_tuples(capsys):
+    # tiles given as lists are stored as tuples, so that the configurations are hashable
+    with kernel_config(tile_1d=[256], tile_2d=[16, 16], tile_3d=[2, 4, 8], tile_4d=[1, 2, 4, 8]):
+        config = get_kernel_config()
+    assert (config.tile_1d, config.tile_2d, config.tile_3d, config.tile_4d) == (
+        (256,),
+        (16, 16),
+        (2, 4, 8),
+        (1, 2, 4, 8),
+    )
+    assert hash(config) == hash(dataclasses.replace(config))
