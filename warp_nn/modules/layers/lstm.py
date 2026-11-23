@@ -22,7 +22,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
 
-from ._common import reduction_chunk
+from ._common import reduction_chunk, sequence_shape, time_step
 from .lstm_cell import _create_kernels
 
 
@@ -34,6 +34,7 @@ class LSTM(Module):
         *,
         num_layers: int = 1,
         bidirectional: bool = False,
+        batch_first: bool = True,
         bias: bool = True,
         initialize_parameters: bool = True,
         requires_grad: bool = True,
@@ -112,6 +113,9 @@ class LSTM(Module):
         :param hidden_size: The number of hidden features.
         :param num_layers: The number of stacked recurrent layers.
         :param bidirectional: Whether each layer processes the sequence in both directions.
+        :param batch_first: Whether the input and output sequences are batch-first,
+            ``(batch_size, sequence_length, features)``, rather than sequence-first,
+            ``(sequence_length, batch_size, features)``. The layout of the hidden and cell states is not affected.
         :param bias: Whether to include a bias term.
         :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
             If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
@@ -127,6 +131,7 @@ class LSTM(Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.bidirectional = bidirectional
+        self.batch_first = batch_first
         self._num_directions = 2 if bidirectional else 1
         # create/register parameters, per layer and direction
         # - list of {"weight_ih": ..., "weight_hh": ..., "bias_ih": ..., "bias_hh": ...},
@@ -178,6 +183,8 @@ class LSTM(Module):
         final hidden and cell states and (default) initial hidden and cell states arrays."""
         num_directions, hidden_size = self._num_directions, self.hidden_size
         output_shape = (batch_size, sequence_length, num_directions * hidden_size)
+        if not self.batch_first:
+            output_shape = (sequence_length, batch_size, output_shape[2])
         cell_shape = (num_directions * self.num_layers, sequence_length, batch_size, hidden_size)
         return (
             [
@@ -200,12 +207,14 @@ class LSTM(Module):
     ) -> tuple[wp.array, tuple[wp.array, wp.array]]:
         """Forward pass of the module.
 
-        :param input: The input sequence array, with shape ``(batch_size, sequence_length, input_size)``.
+        :param input: The input sequence array, with shape ``(batch_size, sequence_length, input_size)``,
+            or ``(sequence_length, batch_size, input_size)`` if ``batch_first`` is false.
         :param hidden: A tuple of the initial hidden state and cell state arrays, both with shapes
             ``(D * num_layers, batch_size, hidden_size)``. If not given, they default to zeros.
 
         :return: A tuple of the output sequence array (the hidden states of the last layer for each element in the
-            sequence), with shape ``(batch_size, sequence_length, D * hidden_size)``, and a tuple of the final
+            sequence), with shape ``(batch_size, sequence_length, D * hidden_size)``, or
+            ``(sequence_length, batch_size, D * hidden_size)`` if ``batch_first`` is false, and a tuple of the final
             hidden state and cell state arrays (of each layer and direction), both with shapes
             ``(D * num_layers, batch_size, hidden_size)``.
 
@@ -213,11 +222,11 @@ class LSTM(Module):
             or if the hidden and cell states are not given as a tuple.
         """
         if input.ndim != 3 or input.shape[2] != self.input_size:
+            layout = "batch_size, sequence_length" if self.batch_first else "sequence_length, batch_size"
             raise ValueError(
-                f"Expected an input array with shape (batch_size, sequence_length, {self.input_size}), "
-                f"got {tuple(input.shape)}"
+                f"Expected an input array with shape ({layout}, {self.input_size}), got {tuple(input.shape)}"
             )
-        batch_size, sequence_length, _ = input.shape
+        batch_size, sequence_length = sequence_shape(input.shape, self.batch_first)
         num_directions, hidden_size = self._num_directions, self.hidden_size
         hidden_shape = (num_directions * self.num_layers, batch_size, hidden_size)
         if hidden is not None:
@@ -258,11 +267,11 @@ class LSTM(Module):
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state, cell = hidden[0][index], hidden[1][index]
                 for t in reversed(range(sequence_length)) if direction else range(sequence_length):
-                    output, output_cell = layer_output[:, t, features], cells[index, t]
+                    output, output_cell = time_step(layer_output, t, self.batch_first)[:, features], cells[index, t]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
-                        inputs=[layer_input[:, t], state, cell, *weights, *biases],
+                        inputs=[time_step(layer_input, t, self.batch_first), state, cell, *weights, *biases],
                         outputs=[output, output_cell],
                         device=self.device,
                         block_dim=config.block_dim,

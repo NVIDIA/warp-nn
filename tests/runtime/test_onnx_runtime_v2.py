@@ -30,6 +30,7 @@ from tests.utilities import is_device_available
 from warp_nn import nn
 from warp_nn.modules import activations, layers, operators
 from warp_nn.runtime import OnnxRuntime, OnnxTensorSpec
+from warp_nn.runtime._onnx_kernels import reverse_sequence, to_onnx_sequence
 
 
 _OPSET = 24
@@ -682,14 +683,15 @@ _TORCH_GATE_ORDER = {"RNN": (0,), "GRU": (1, 0, 2), "LSTM": (0, 2, 3, 1)}  # ONN
 @pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
 @pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
 @pytest.mark.parametrize("variant", ["full", "defaults", "partial_states"])  # (initial states, bias)
-def test_recurrent_gradients(tmp_path, device, op_type, direction, variant):
+@pytest.mark.parametrize("seq_length", [3, 1])
+def test_recurrent_gradients(tmp_path, device, op_type, direction, variant, seq_length):
     torch = pytest.importorskip("torch")
     _skip_if_unavailable(device)
     if variant == "partial_states" and op_type != "LSTM":
         pytest.skip("only the LSTM has more than one initial state")
     gates = {"RNN": 1, "GRU": 3, "LSTM": 4}[op_type]
     directions = 2 if direction == "bidirectional" else 1
-    input_size, hidden_size, seq_length, batch = 5, 4, 3, 2
+    input_size, hidden_size, batch = 5, 4, 2
     constants = _recurrent_constants(gates, directions, input_size, hidden_size)
     if variant == "defaults":
         del constants["B"]
@@ -792,11 +794,46 @@ def test_recurrent_sequence_lengths(tmp_path, device):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", _OPSET)])
     runtime = _load(tmp_path, model, device)
 
-    for seq_length, batch in ((3, 2), (5, 2), (3, 2)):
+    for seq_length, batch in ((3, 2), (1, 2), (5, 2), (1, 3), (3, 2)):
         x = _uniform((seq_length, batch, 5))
         outputs = runtime({"x": wp.array(x, device=device)})
         for output, expected in zip(outputs.values(), ReferenceEvaluator(model).run(None, {"x": x})):
             np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
+@pytest.mark.parametrize("seq_length", [1, 3])
+def test_recurrent_layout_conversions(tmp_path, device, direction, seq_length, monkeypatch):
+    _skip_if_unavailable(device)
+    directions = 2 if direction == "bidirectional" else 1
+    constants = _recurrent_constants(3, directions, 5, 4)
+    node = helper.make_node(
+        "GRU", ["x", "W", "R", "B"], ["y", "y_h"], hidden_size=4, linear_before_reset=1, direction=direction
+    )
+    x = _uniform((seq_length, 3, 5))
+    model = _make_model([node], {"x": x}, {"y": np.float32, "y_h": np.float32}, constants)
+    runtime = _load(tmp_path, model, device)
+
+    launched = []
+    launch = wp.launch
+
+    def counting_launch(kernel, *args, **kwargs):
+        launched.append(kernel.key)
+        return launch(kernel, *args, **kwargs)
+
+    monkeypatch.setattr(wp, "launch", counting_launch)
+    outputs = runtime({"x": wp.array(x, device=device)})
+    # the sequence-first module converts neither the input nor (for one direction) the output sequence: only the
+    # reverse direction reverses them, and both directions interleave the output sequence
+    expected_conversions = {
+        "forward": set(),
+        "reverse": {reverse_sequence.key, to_onnx_sequence.key},
+        "bidirectional": {to_onnx_sequence.key},
+    }[direction]
+    assert {reverse_sequence.key, to_onnx_sequence.key} & set(launched) == expected_conversions
+    for output, expected in zip(outputs.values(), ReferenceEvaluator(model).run(None, {"x": x})):
+        np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)
 
 
 def _stacked_lstm_model(batch=5, num_layers=2, input_size=2, hidden_size=3):

@@ -28,6 +28,16 @@ def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...
     raise TypeError(f"Expected a tuple or int, got {type(value)}")
 
 
+def sequence_shape(shape: tuple[int, ...], batch_first: bool) -> tuple[int, int]:
+    """Get the ``(batch_size, sequence_length)`` of a sequence array shape, in the given layout."""
+    return (shape[0], shape[1]) if batch_first else (shape[1], shape[0])
+
+
+def time_step(array: wp.array, t: int, batch_first: bool) -> wp.array:
+    """Get the ``(batch_size, features)`` view of the time step ``t`` of a sequence array, in the given layout."""
+    return array[:, t] if batch_first else array[t]
+
+
 def reduction_chunk(config: KernelConfig, size: int) -> int:
     """Get the size of the reduction (K) chunks of a layer's matrix multiplications.
 

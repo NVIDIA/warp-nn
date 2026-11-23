@@ -55,6 +55,7 @@ def _disable_cudnn_and_tf32():
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("bidirectional", [False, True])
+@pytest.mark.parametrize("batch_first", [True, False])
 # test-specific parameters
 @pytest.mark.parametrize("initial_hidden", [True, False])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -62,6 +63,7 @@ def test_forward(
     capsys,
     device,
     initial_hidden,
+    batch_first,
     bidirectional,
     bias,
     batch_size,
@@ -73,12 +75,12 @@ def test_forward(
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     num_directions = 2 if bidirectional else 1
-    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "bias": bias}
+    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "batch_first": batch_first, "bias": bias}
     check_forward_rnn(
         warp_module=nn.RNN(input_size, hidden_size, **kwargs),
-        torch_module=torch.nn.RNN(input_size, hidden_size, batch_first=True, **kwargs),
+        torch_module=torch.nn.RNN(input_size, hidden_size, **kwargs),
         device=device,
-        shape=[batch_size, sequence_length, input_size],
+        shape=[batch_size, sequence_length, input_size] if batch_first else [sequence_length, batch_size, input_size],
         hidden_shapes=[[num_directions * num_layers, batch_size, hidden_size]] if initial_hidden else None,
     )
 
@@ -99,6 +101,7 @@ def test_forward(
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("bidirectional", [False, True])
+@pytest.mark.parametrize("batch_first", [True, False])
 # test-specific parameters
 @pytest.mark.parametrize("initial_hidden", [True, False])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -106,6 +109,7 @@ def test_gradients(
     capsys,
     device,
     initial_hidden,
+    batch_first,
     bidirectional,
     bias,
     batch_size,
@@ -117,12 +121,12 @@ def test_gradients(
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     num_directions = 2 if bidirectional else 1
-    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "bias": bias}
+    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "batch_first": batch_first, "bias": bias}
     check_gradients_rnn(
         warp_module=nn.RNN(input_size, hidden_size, **kwargs),
-        torch_module=torch.nn.RNN(input_size, hidden_size, batch_first=True, **kwargs),
+        torch_module=torch.nn.RNN(input_size, hidden_size, **kwargs),
         device=device,
-        shape=[batch_size, sequence_length, input_size],
+        shape=[batch_size, sequence_length, input_size] if batch_first else [sequence_length, batch_size, input_size],
         hidden_shapes=[[num_directions * num_layers, batch_size, hidden_size]] if initial_hidden else None,
     )
 
