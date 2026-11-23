@@ -31,6 +31,7 @@ from warp_nn import nn
 from warp_nn.modules import activations, layers, operators
 from warp_nn.runtime import OnnxRuntime, OnnxTensorSpec
 from warp_nn.runtime._onnx_kernels import reverse_sequence, to_onnx_sequence
+from warp_nn.utils.ops import _COPY_KERNELS
 
 
 _OPSET = 24
@@ -824,14 +825,15 @@ def test_recurrent_layout_conversions(tmp_path, device, direction, seq_length, m
 
     monkeypatch.setattr(wp, "launch", counting_launch)
     outputs = runtime({"x": wp.array(x, device=device)})
-    # the sequence-first module converts neither the input nor (for one direction) the output sequence: only the
-    # reverse direction reverses them, and both directions interleave the output sequence
+    # the sequence-first module neither converts nor copies the input or (for one direction) the output sequence: only
+    # the reverse direction reverses them, and both directions interleave the output sequence
     expected_conversions = {
         "forward": set(),
         "reverse": {reverse_sequence.key, to_onnx_sequence.key},
         "bidirectional": {to_onnx_sequence.key},
     }[direction]
-    assert {reverse_sequence.key, to_onnx_sequence.key} & set(launched) == expected_conversions
+    conversions = {reverse_sequence.key, to_onnx_sequence.key, _COPY_KERNELS[3].key}
+    assert conversions & set(launched) == expected_conversions
     for output, expected in zip(outputs.values(), ReferenceEvaluator(model).run(None, {"x": x})):
         np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)
 

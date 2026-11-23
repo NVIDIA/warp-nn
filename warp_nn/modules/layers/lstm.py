@@ -115,7 +115,8 @@ class LSTM(Module):
         :param bidirectional: Whether each layer processes the sequence in both directions.
         :param batch_first: Whether the input and output sequences are batch-first,
             ``(batch_size, sequence_length, features)``, rather than sequence-first,
-            ``(sequence_length, batch_size, features)``. The layout of the hidden and cell states is not affected.
+            ``(sequence_length, batch_size, features)``. Unlike PyTorch, it defaults to batch-first.
+            The layout of the hidden and cell states is not affected.
         :param bias: Whether to include a bias term.
         :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
             If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)

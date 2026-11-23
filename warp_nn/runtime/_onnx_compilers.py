@@ -347,9 +347,8 @@ class _RecurrentOperation(_CachedOperation):
     sequence of one direction has the memory layout of the ONNX output ``Y``
     ``(seq_length, num_directions, batch_size, hidden_size)``, so neither of them is converted. Only the reverse
     direction (without the forward one), which is executed by the forward module on the time-reversed sequence, and
-    the interleaving of the bidirectional output sequence are converted, by differentiable kernels. A non-contiguous
-    input is copied into a contiguous array. The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned
-    by the module.
+    the interleaving of the bidirectional output sequence are converted, by differentiable kernels. The final states
+    (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned by the module.
     """
 
     node: _Node
@@ -363,16 +362,16 @@ class _RecurrentOperation(_CachedOperation):
         return (self.module,)
 
     def _allocate_arrays(
-        self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int], convert_input: bool
+        self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int]
     ) -> tuple[wp.array | None, wp.array | None, tuple[wp.array, ...]]:
-        """Allocate the converted input (only if converted), converted output sequence (only if used and converted)
+        """Allocate the reversed input (only if reversed), converted output sequence (only if used and converted)
         and default (zero) initial states arrays."""
         module = self.module
         num_directions, _, hidden_size = state_shape
         arguments = {"dtype": wp.float32, "device": module.device}
         grad = {"requires_grad": module.requires_grad}
         input = None
-        if convert_input:
+        if self.flip:
             input = wp.empty((seq_length, batch_size, module.input_size), **arguments, **grad)
         sequence = None
         if self.node.outputs[0] and (self.flip or num_directions == 2):
@@ -399,23 +398,19 @@ class _RecurrentOperation(_CachedOperation):
                     f"OnnxRuntime {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
                     f"got {tuple(initial_state.shape)}"
                 )
-        # cache the converted input and output sequence (only if needed) and default (zero) initial states
-        convert_input = self.flip or not input.is_contiguous
-        converted_input, sequence, zeros = self.cache.get(
-            (seq_length, batch_size, convert_input),
-            lambda: self._allocate_arrays(seq_length, batch_size, state_shape, convert_input),
+        # cache the reversed input and converted output sequence (only if needed) and default (zero) initial states
+        reversed_input, sequence, zeros = self.cache.get(
+            (seq_length, batch_size), lambda: self._allocate_arrays(seq_length, batch_size, state_shape)
         )
         if self.flip:
             wp.launch(
                 reverse_sequence,
                 dim=tuple(input.shape),
                 inputs=[input],
-                outputs=[converted_input],
+                outputs=[reversed_input],
                 device=module.device,
             )
-            input = converted_input
-        elif convert_input:
-            input = copy(input, converted_input)
+            input = reversed_input
         hidden = None
         if any(state is not None for state in initial_states):
             hidden = tuple(zero if state is None else state for state, zero in zip(initial_states, zeros))
