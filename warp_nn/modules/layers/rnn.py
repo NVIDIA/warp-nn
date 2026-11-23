@@ -22,7 +22,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
 
-from ._common import reduction_chunk, sequence_shape, time_step
+from ._common import overlap, reduction_chunk, sequence_shape, time_step
 from .rnn_cell import _create_kernels
 
 
@@ -218,8 +218,13 @@ class RNN(Module):
                 index = layer * num_directions + direction
                 parameters = self._layer_parameters[index]
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
-                state = hidden[index]
-                for t in reversed(range(sequence_length)) if direction else range(sequence_length):
+                state, final_hidden = hidden[index], output_hidden[index]
+                # the last time step writes the final hidden state, unless a single time step reads it as its initial
+                # hidden state (which the tiles of other blocks may still load)
+                store_final = sequence_length > 1 or not overlap(state, final_hidden)
+                steps = reversed(range(sequence_length)) if direction else range(sequence_length)
+                for step, t in enumerate(steps):
+                    last = step == sequence_length - 1
                     output = time_step(layer_output, t, self.batch_first)[:, features]
                     wp.launch_tiled(
                         kernel,
@@ -232,11 +237,12 @@ class RNN(Module):
                             parameters["bias_ih"].data if "bias_ih" in parameters else None,
                             parameters["bias_hh"].data if "bias_hh" in parameters else None,
                         ],
-                        outputs=[output],
+                        outputs=[output, final_hidden if last and store_final else None],
                         device=self.device,
                         block_dim=config.block_dim,
                     )
                     state = output
-                copy(state, output_hidden[index])
+                if not store_final:
+                    copy(state, final_hidden)
             layer_input = layer_output
         return outputs[-1], output_hidden

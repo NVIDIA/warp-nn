@@ -16,6 +16,8 @@
 ### Changed
 - Run the `RNN`, `GRU` and `LSTM` nodes of the ONNX inference runtime with sequence-first modules, without converting
   the input sequence (or, for one direction, the output sequence) between the ONNX and batch-first layouts
+- Store the final hidden state of the `RNN` and `GRU` modules directly from the kernel of the last time step,
+  instead of copying it
 
 ## [0.4.1] - 2026-10-18
 ### Changed

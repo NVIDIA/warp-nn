@@ -59,6 +59,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
         bias_hz: wp.array2d[float],
         bias_hn: wp.array2d[float],
         output: wp.array2d[float],
+        final_hidden: wp.array2d[float],
     ):
         i, j = wp.tid()
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
@@ -89,6 +90,9 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
             gate_hn += wp.tile_broadcast(wp.tile_load(bias_hn, shape=shape_b, offset=offset_b), shape=shape_T)
         h = wp.tile_map(compute_hidden_state, t_hidden, gate_r, gate_z, gate_in, gate_hn)
         wp.tile_store(output, wp.tile_transpose(h), offset=offset)
+        # the last time step of a sequence also stores the hidden state as the final one (if given)
+        if final_hidden.shape[0] > 0:
+            wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
 
     return kernel
 
@@ -252,7 +256,7 @@ class GRUCell(Module):
                 self.bias_hh.data[self._slices[1]] if self.bias_hh else None,
                 self.bias_hh.data[self._slices[2]] if self.bias_hh else None,
             ],
-            outputs=[output],
+            outputs=[output, None],
             device=self.device,
             block_dim=config.block_dim,
         )
