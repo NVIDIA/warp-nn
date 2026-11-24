@@ -78,6 +78,11 @@ def tile_gemm_2d(shape: tuple[int, int], residual_dim: int | None = None):
 
 
 def tile_transposed_gemm_2d(shape: tuple[int, int], residual_dim: int | None = None):
+    """Create a function that computes the transposed tile ``C^T = A @ B^T`` of the ``index`` (row, column) tile of
+    ``C = B @ A^T``, with shape ``(shape[1], shape[0])``.
+
+    The rows of ``A`` start at ``row`` (e.g. the first row of a gate in the stacked weights of recurrent layers).
+    """
     (d0, d1) = shape
     residual_dim = min(d1, _MAX_RESIDUAL_DIM) if residual_dim is None else residual_dim
 
@@ -86,6 +91,7 @@ def tile_transposed_gemm_2d(shape: tuple[int, int], residual_dim: int | None = N
         A: wp.array2d[float],
         B: wp.array2d[float],
         index: tuple[int, int],
+        row: int = 0,
     ):
         i, j = index[0], index[1]
         # compute iteration steps
@@ -96,7 +102,7 @@ def tile_transposed_gemm_2d(shape: tuple[int, int], residual_dim: int | None = N
         # C += A @ B
         C = wp.tile_zeros(shape=(d1, d0), dtype=A.dtype)
         for k in range(count):
-            a = wp.tile_load(A, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
+            a = wp.tile_load(A, shape=(d1, residual_dim), offset=(row + j * d1, k * residual_dim))
             b = wp.tile_load(B, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
             wp.tile_matmul(a, wp.tile_transpose(b), C)
         return C
@@ -149,7 +155,7 @@ def tile_transposed_dual_gemm_2d(shape: tuple[int, int], residual_dim: int | Non
     """Same as :func:`tile_transposed_gemm_2d`, but accumulating two GEMMs (``A1 @ B1^T`` and ``A2 @ B2^T``).
 
     Accumulating both products in a single tile (instead of summing two tiles) saves one tile expression (and its
-    shared memory) per call, which matters for kernels with many gates.
+    shared memory) per call, which matters for kernels with many gates. The rows of ``A1`` and ``A2`` start at ``row``.
     """
     (d0, d1) = shape
     residual_dim = min(d1, _MAX_RESIDUAL_DIM) if residual_dim is None else residual_dim
@@ -161,6 +167,7 @@ def tile_transposed_dual_gemm_2d(shape: tuple[int, int], residual_dim: int | Non
         A2: wp.array2d[float],
         B2: wp.array2d[float],
         index: tuple[int, int],
+        row: int = 0,
     ):
         i, j = index[0], index[1]
         # the products share a single loop (consecutive loops with tile_matmul segfault in the backward pass),
@@ -174,11 +181,11 @@ def tile_transposed_dual_gemm_2d(shape: tuple[int, int], residual_dim: int | Non
         C = wp.tile_zeros(shape=(d1, d0), dtype=A1.dtype)
         for k in range(wp.max(count1, count2)):
             if k < count1:
-                a1 = wp.tile_load(A1, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
+                a1 = wp.tile_load(A1, shape=(d1, residual_dim), offset=(row + j * d1, k * residual_dim))
                 b1 = wp.tile_load(B1, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
                 wp.tile_matmul(a1, wp.tile_transpose(b1), C)
             if k < count2:
-                a2 = wp.tile_load(A2, shape=(d1, residual_dim), offset=(j * d1, k * residual_dim))
+                a2 = wp.tile_load(A2, shape=(d1, residual_dim), offset=(row + j * d1, k * residual_dim))
                 b2 = wp.tile_load(B2, shape=(d0, residual_dim), offset=(i * d0, k * residual_dim))
                 wp.tile_matmul(a2, wp.tile_transpose(b2), C)
         return C

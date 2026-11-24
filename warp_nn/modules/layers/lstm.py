@@ -160,12 +160,6 @@ class LSTM(Module):
             include_bias=bias,
             residual_dim=reduction_chunk(self.config, max(self.input_size, self._num_directions * self.hidden_size)),
         )
-        self._slices = (
-            slice(0 * self.hidden_size, 1 * self.hidden_size),
-            slice(1 * self.hidden_size, 2 * self.hidden_size),
-            slice(2 * self.hidden_size, 3 * self.hidden_size),
-            slice(3 * self.hidden_size, 4 * self.hidden_size),
-        )
 
     def _initialize_parameters(self):
         for parameter in self.parameters():
@@ -174,7 +168,8 @@ class LSTM(Module):
     def _allocate_output(
         self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
     ) -> tuple[list[wp.array], wp.array, tuple[wp.array, wp.array], tuple[wp.array, wp.array]]:
-        """Allocate the outputs (of each layer), cell states (of each layer, direction and time step),
+        """Allocate the outputs (of each layer), cell states (of each layer, direction and time step, except the last
+        one, whose cell state is written to the final cell state array),
         final hidden and cell states and (default) initial hidden and cell states arrays."""
         num_directions, hidden_size = self._num_directions, self.hidden_size
         output_shape = (batch_size, sequence_length, num_directions * hidden_size)
@@ -228,7 +223,7 @@ class LSTM(Module):
                     raise ValueError(f"Expected a {name} array with shape {hidden_shape}, got {tuple(array.shape)}")
         dtype = input.dtype
         key = (tuple(input.shape), dtype)
-        # cache outputs (of each layer), cell states (of each layer, direction and time step),
+        # cache outputs (of each layer), cell states (of each layer, direction and time step, except the last one),
         # final hidden and cell states and (default) initial hidden and cell states
         outputs, cells, output_hidden, initial_hidden = self.cache.get(
             key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
@@ -238,7 +233,7 @@ class LSTM(Module):
         # launch kernels, one per layer, direction and time step
         # - each time step writes its hidden and cell states to their own slices of the layer output and cell state
         #   arrays (rather than overwriting the same arrays), so that the tape can propagate the gradients through
-        #   the sequence
+        #   the sequence; the last time step writes its cell state to the final cell state array
         config = self.config.adapt(
             (batch_size, hidden_size), self.device, requires_grad=self.requires_grad, policy=AdaptationPolicy.MATMUL
         )
@@ -249,16 +244,19 @@ class LSTM(Module):
             for direction in range(num_directions):
                 index = layer * num_directions + direction
                 parameters = self._layer_parameters[index]
-                # split the parameters into the input, forget, cell and output gates' parameters
-                weights = [parameters[name].data[s] for name in ("weight_ih", "weight_hh") for s in self._slices]
-                if "bias_ih" in parameters:
-                    biases = [parameters[name].data[s] for name in ("bias_ih", "bias_hh") for s in self._slices]
-                else:
-                    biases = [None] * 8
+                # whole (stacked) parameters: the kernel reads each gate's rows
+                weights = [parameters["weight_ih"].data, parameters["weight_hh"].data]
+                biases = (
+                    [parameters["bias_ih"].data, parameters["bias_hh"].data] if "bias_ih" in parameters else [None] * 2
+                )
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state, cell = hidden[0][index], hidden[1][index]
+                final_cell = output_hidden[1][index]
+                last = 0 if direction else sequence_length - 1
                 for t in reversed(range(sequence_length)) if direction else range(sequence_length):
-                    output, output_cell = layer_output[:, t, features], cells[index, t]
+                    # the last time step writes its cell state directly to the final cell state array
+                    output = layer_output[:, t, features]
+                    output_cell = final_cell if t == last else cells[index, t]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
@@ -268,7 +266,7 @@ class LSTM(Module):
                         block_dim=config.block_dim,
                     )
                     state, cell = output, output_cell
+                # the hidden state of the last time step is part of the output sequence, so it is copied
                 copy(state, output_hidden[0][index])
-                copy(cell, output_hidden[1][index])
             layer_input = layer_output
         return outputs[-1], output_hidden

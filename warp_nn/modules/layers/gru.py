@@ -150,11 +150,6 @@ class GRU(Module):
             include_bias=bias,
             residual_dim=reduction_chunk(self.config, max(self.input_size, self._num_directions * self.hidden_size)),
         )
-        self._slices = (
-            slice(0 * self.hidden_size, 1 * self.hidden_size),
-            slice(1 * self.hidden_size, 2 * self.hidden_size),
-            slice(2 * self.hidden_size, 3 * self.hidden_size),
-        )
 
     def _initialize_parameters(self):
         for parameter in self.parameters():
@@ -218,12 +213,11 @@ class GRU(Module):
             for direction in range(num_directions):
                 index = layer * num_directions + direction
                 parameters = self._layer_parameters[index]
-                # split the parameters into the reset, update and new gates' parameters
-                weights = [parameters[name].data[s] for name in ("weight_ih", "weight_hh") for s in self._slices]
-                if "bias_ih" in parameters:
-                    biases = [parameters[name].data[s] for name in ("bias_ih", "bias_hh") for s in self._slices]
-                else:
-                    biases = [None] * 6
+                # whole (stacked) parameters: the kernel reads each gate's rows
+                weights = [parameters["weight_ih"].data, parameters["weight_hh"].data]
+                biases = (
+                    [parameters["bias_ih"].data, parameters["bias_hh"].data] if "bias_ih" in parameters else [None] * 2
+                )
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state = hidden[index]
                 for t in reversed(range(sequence_length)) if direction else range(sequence_length):

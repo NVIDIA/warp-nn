@@ -46,47 +46,45 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
     def kernel(
         input: wp.array2d[float],
         hidden: wp.array2d[float],
-        weight_ir: wp.array2d[float],
-        weight_iz: wp.array2d[float],
-        weight_in: wp.array2d[float],
-        weight_hr: wp.array2d[float],
-        weight_hz: wp.array2d[float],
-        weight_hn: wp.array2d[float],
-        bias_ir: wp.array2d[float],
-        bias_iz: wp.array2d[float],
-        bias_in: wp.array2d[float],
-        bias_hr: wp.array2d[float],
-        bias_hz: wp.array2d[float],
-        bias_hn: wp.array2d[float],
+        weight_ih: wp.array2d[float],  # (3 * hidden_size, input_size): reset, update and new gates' rows
+        weight_hh: wp.array2d[float],  # (3 * hidden_size, hidden_size)
+        bias_ih: wp.array2d[float],  # (3 * hidden_size, 1)
+        bias_hh: wp.array2d[float],  # (3 * hidden_size, 1)
         output: wp.array2d[float],
     ):
         i, j = wp.tid()
+        hidden_size = output.shape[1]
         shape = (wp.static(config.tile_2d[0]), wp.static(config.tile_2d[1]))
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
         t_hidden = wp.tile_transpose(wp.tile_load(hidden, shape=shape, offset=offset))
-        # the reset and update gates accumulate their input-to-hidden and hidden-to-hidden products in a single tile
+        # the reset and update gates accumulate their input-to-hidden and hidden-to-hidden products in a single tile,
+        # from the gate's rows of the (stacked) weights
         tile_transposed_gemm_2d_fn = wp.static(tile_transposed_gemm_2d(config.tile_2d, residual_dim))
         tile_transposed_dual_gemm_2d_fn = wp.static(tile_transposed_dual_gemm_2d(config.tile_2d, residual_dim))
-        gate_r = tile_transposed_dual_gemm_2d_fn(weight_ir, input, weight_hr, hidden, index=(i, j))
-        gate_z = tile_transposed_dual_gemm_2d_fn(weight_iz, input, weight_hz, hidden, index=(i, j))
-        gate_in = tile_transposed_gemm_2d_fn(weight_in, input, index=(i, j))
-        gate_hn = tile_transposed_gemm_2d_fn(weight_hn, hidden, index=(i, j))
+        gate_r = tile_transposed_dual_gemm_2d_fn(weight_ih, input, weight_hh, hidden, (i, j), 0 * hidden_size)
+        gate_z = tile_transposed_dual_gemm_2d_fn(weight_ih, input, weight_hh, hidden, (i, j), 1 * hidden_size)
+        gate_in = tile_transposed_gemm_2d_fn(weight_ih, input, (i, j), 2 * hidden_size)
+        gate_hn = tile_transposed_gemm_2d_fn(weight_hh, hidden, (i, j), 2 * hidden_size)
         if wp.static(include_bias):
             shape_T = (wp.static(config.tile_2d[1]), wp.static(config.tile_2d[0]))
             shape_b = (wp.static(config.tile_2d[1]), 1)
-            offset_b = (j * wp.static(config.tile_2d[1]), 0)
+            row = j * wp.static(config.tile_2d[1])
             gate_r += wp.tile_broadcast(
-                wp.tile_load(bias_ir, shape=shape_b, offset=offset_b)
-                + wp.tile_load(bias_hr, shape=shape_b, offset=offset_b),
+                wp.tile_load(bias_ih, shape=shape_b, offset=(0 * hidden_size + row, 0))
+                + wp.tile_load(bias_hh, shape=shape_b, offset=(0 * hidden_size + row, 0)),
                 shape=shape_T,
             )
             gate_z += wp.tile_broadcast(
-                wp.tile_load(bias_iz, shape=shape_b, offset=offset_b)
-                + wp.tile_load(bias_hz, shape=shape_b, offset=offset_b),
+                wp.tile_load(bias_ih, shape=shape_b, offset=(1 * hidden_size + row, 0))
+                + wp.tile_load(bias_hh, shape=shape_b, offset=(1 * hidden_size + row, 0)),
                 shape=shape_T,
             )
-            gate_in += wp.tile_broadcast(wp.tile_load(bias_in, shape=shape_b, offset=offset_b), shape=shape_T)
-            gate_hn += wp.tile_broadcast(wp.tile_load(bias_hn, shape=shape_b, offset=offset_b), shape=shape_T)
+            gate_in += wp.tile_broadcast(
+                wp.tile_load(bias_ih, shape=shape_b, offset=(2 * hidden_size + row, 0)), shape=shape_T
+            )
+            gate_hn += wp.tile_broadcast(
+                wp.tile_load(bias_hh, shape=shape_b, offset=(2 * hidden_size + row, 0)), shape=shape_T
+            )
         h = wp.tile_map(compute_hidden_state, t_hidden, gate_r, gate_z, gate_in, gate_hn)
         wp.tile_store(output, wp.tile_transpose(h), offset=offset)
 
@@ -202,11 +200,6 @@ class GRUCell(Module):
             include_bias=self.bias_ih is not None,
             residual_dim=reduction_chunk(self.config, max(self.input_size, self.hidden_size)),
         )
-        self._slices = (
-            slice(0 * self.hidden_size, 1 * self.hidden_size),
-            slice(1 * self.hidden_size, 2 * self.hidden_size),
-            slice(2 * self.hidden_size, 3 * self.hidden_size),
-        )
 
     def _initialize_parameters(self):
         kaiming_uniform(self.weight_ih.data, mode="scale", scale=1.0 / self.hidden_size)
@@ -239,18 +232,10 @@ class GRUCell(Module):
             inputs=[
                 input,
                 hidden,
-                self.weight_ih.data[self._slices[0]],
-                self.weight_ih.data[self._slices[1]],
-                self.weight_ih.data[self._slices[2]],
-                self.weight_hh.data[self._slices[0]],
-                self.weight_hh.data[self._slices[1]],
-                self.weight_hh.data[self._slices[2]],
-                self.bias_ih.data[self._slices[0]] if self.bias_ih else None,
-                self.bias_ih.data[self._slices[1]] if self.bias_ih else None,
-                self.bias_ih.data[self._slices[2]] if self.bias_ih else None,
-                self.bias_hh.data[self._slices[0]] if self.bias_hh else None,
-                self.bias_hh.data[self._slices[1]] if self.bias_hh else None,
-                self.bias_hh.data[self._slices[2]] if self.bias_hh else None,
+                self.weight_ih.data,
+                self.weight_hh.data,
+                self.bias_ih.data if self.bias_ih else None,
+                self.bias_hh.data if self.bias_hh else None,
             ],
             outputs=[output],
             device=self.device,

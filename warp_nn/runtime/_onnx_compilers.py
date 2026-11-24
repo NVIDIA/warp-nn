@@ -292,6 +292,13 @@ class _ElementwiseOperation(_CachedOperation):
         return self.chain
 
     def __call__(self, tensors: dict[str, wp.array]) -> None:
+        # fast path for unary operators (e.g. activations) with up to 3D inputs, which need neither broadcasting,
+        # nor dtype checks, nor flattening
+        if len(self.operands) == 1:
+            input = tensors[self.operands[0]]
+            if input.ndim <= 3:
+                tensors[self.node.outputs[0]] = self.chain[0](input)
+                return
         values = tuple(tensors[operand] if isinstance(operand, str) else operand for operand in self.operands)
         dtypes = {value.dtype for value in values if isinstance(value, wp.array)}
         if len(dtypes) > 1:
@@ -345,7 +352,8 @@ class _RecurrentOperation(_CachedOperation):
 
     The module processes batch-first sequences, so the input is converted from the ONNX layout
     ``(seq_length, batch_size, input_size)`` and the output sequence ``Y`` (only if it is used) is converted to
-    ``(seq_length, num_directions, batch_size, hidden_size)``, by differentiable kernels. The reverse direction
+    ``(seq_length, num_directions, batch_size, hidden_size)``, by differentiable kernels (or by views, for a single
+    time step, which is the common case of recurrent policies stepped once per call). The reverse direction
     (without the forward one) is executed by the forward module, reversing the time steps of the input and output.
     The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned by the module.
     """
@@ -361,16 +369,25 @@ class _RecurrentOperation(_CachedOperation):
         return (self.module,)
 
     def _allocate_output(
-        self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int]
-    ) -> tuple[wp.array, wp.array | None, tuple[wp.array, ...]]:
-        """Allocate the batch-first input, output sequence (only if used) and default (zero) initial states arrays."""
+        self,
+        seq_length: int,
+        batch_size: int,
+        state_shape: tuple[int, int, int],
+        *,
+        view_input: bool,
+        view_output: bool,
+    ) -> tuple[wp.array | None, wp.array | None, tuple[wp.array, ...]]:
+        """Allocate the batch-first input (unless it is a view of the input), output sequence (only if used, and
+        unless it is a view of the module output) and default (zero) initial states arrays."""
         module = self.module
         num_directions, _, hidden_size = state_shape
         arguments = {"dtype": wp.float32, "device": module.device}
         grad = {"requires_grad": module.requires_grad}
-        batch_first = wp.empty((batch_size, seq_length, module.input_size), **arguments, **grad)
+        batch_first = None
+        if not view_input:
+            batch_first = wp.empty((batch_size, seq_length, module.input_size), **arguments, **grad)
         sequence = None
-        if self.node.outputs[0]:
+        if self.node.outputs[0] and not view_output:
             sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
         zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
         return batch_first, sequence, zeros
@@ -394,18 +411,29 @@ class _RecurrentOperation(_CachedOperation):
                     f"OnnxRuntime {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
                     f"got {tuple(initial_state.shape)}"
                 )
+        # a single time step has the same memory layout in the sequence-first and batch-first layouts (and the output
+        # sequence has the ONNX layout for a single direction or batch element), so the layout conversions are views
+        # rather than kernel launches (reversing a single time step is a no-op)
+        view_input = seq_length == 1 and input.is_contiguous
+        view_output = seq_length == 1 and (num_directions == 1 or batch_size == 1)
         # cache the batch-first input, output sequence (only if used) and default (zero) initial states
         batch_first, sequence, zeros = self.cache.get(
-            (seq_length, batch_size), lambda: self._allocate_output(seq_length, batch_size, state_shape)
+            (seq_length, batch_size, view_input),
+            lambda: self._allocate_output(
+                seq_length, batch_size, state_shape, view_input=view_input, view_output=view_output
+            ),
         )
         reverse = int(self.flip)
-        wp.launch(
-            sequence_first_to_batch_first,
-            dim=tuple(input.shape),
-            inputs=[input, reverse],
-            outputs=[batch_first],
-            device=module.device,
-        )
+        if view_input:
+            batch_first = input.reshape((batch_size, seq_length, input_size))
+        else:
+            wp.launch(
+                sequence_first_to_batch_first,
+                dim=tuple(input.shape),
+                inputs=[input, reverse],
+                outputs=[batch_first],
+                device=module.device,
+            )
         hidden = None
         if any(state is not None for state in initial_states):
             hidden = tuple(zero if state is None else state for state, zero in zip(initial_states, zeros))
@@ -413,7 +441,9 @@ class _RecurrentOperation(_CachedOperation):
         output, final_states = module(batch_first, hidden)
         if not isinstance(final_states, tuple):
             final_states = (final_states,)
-        if sequence is not None:
+        if self.node.outputs[0] and view_output:
+            sequence = output.reshape((seq_length, num_directions, batch_size, hidden_size))
+        elif sequence is not None:
             wp.launch(
                 batch_first_to_onnx_sequence,
                 dim=tuple(sequence.shape),
