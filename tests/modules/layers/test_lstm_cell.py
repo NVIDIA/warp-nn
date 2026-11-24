@@ -23,6 +23,7 @@ import numpy as np
 import warp as wp
 
 import warp_nn.nn as nn
+from warp_nn.utils import kernel_config
 
 from ... import utilities
 from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
@@ -135,3 +136,25 @@ def test_saturated_gradients(capsys, device):
     tape.backward(grads={hidden_output: wp.ones_like(hidden_output), cell_output: wp.ones_like(cell_output)})
     for array in [input, *hidden, *module.parameters()]:
         assert np.isfinite(array.grad.numpy()).all()
+
+
+# hidden sizes that are not multiples of the tile width, so that the last tile of each gate also covers rows of the
+# next gate of the stacked parameters (or rows beyond them, for the last gate), which must not contribute
+@pytest.mark.parametrize("tile_2d", [(16, 16), (8, 32)])
+@pytest.mark.parametrize("hidden_size", [5, 17, 40])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_partial_gate_tiles(capsys, device, bias, hidden_size, tile_2d):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    batch_size, input_size = 7, 9
+    for check in (check_forward_rnn, check_gradients_rnn):
+        with kernel_config(tile_2d=tile_2d, adaptive=False):
+            warp_module = nn.LSTMCell(input_size=input_size, hidden_size=hidden_size, bias=bias)
+        check(
+            warp_module=warp_module,
+            torch_module=torch.nn.LSTMCell(input_size=input_size, hidden_size=hidden_size, bias=bias),
+            device=device,
+            shape=[batch_size, input_size],
+            hidden_shapes=[[batch_size, hidden_size]] * 2,
+        )

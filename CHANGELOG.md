@@ -18,6 +18,10 @@
   the input sequence (or, for one direction, the output sequence) between the ONNX and batch-first layouts
 - Store the final hidden state of the `RNN` and `GRU` modules directly from the kernel of the last time step,
   instead of copying it
+- Reduce the host overhead of the `GRU`, `GRUCell`, `LSTM` and `LSTMCell` modules by passing their (stacked)
+  parameters to the kernels as they are (instead of creating per-gate views of them at every call), and write the
+  final cell state of the `LSTM` module directly (instead of copying it)
+- Reduce the host overhead of the ONNX runtime for unary element-wise operators
 
 ## [0.4.1] - 2026-10-18
 ### Changed

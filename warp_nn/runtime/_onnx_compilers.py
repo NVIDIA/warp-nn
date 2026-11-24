@@ -292,6 +292,13 @@ class _ElementwiseOperation(_CachedOperation):
         return self.chain
 
     def __call__(self, tensors: dict[str, wp.array]) -> None:
+        # fast path for unary operators (e.g. activations) with up to 3D inputs, which need neither broadcasting,
+        # nor dtype checks, nor flattening
+        if len(self.operands) == 1:
+            input = tensors[self.operands[0]]
+            if input.ndim <= 3:
+                tensors[self.node.outputs[0]] = self.chain[0](input)
+                return
         values = tuple(tensors[operand] if isinstance(operand, str) else operand for operand in self.operands)
         dtypes = {value.dtype for value in values if isinstance(value, wp.array)}
         if len(dtypes) > 1:

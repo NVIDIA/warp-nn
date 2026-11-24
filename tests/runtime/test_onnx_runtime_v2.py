@@ -684,15 +684,17 @@ _TORCH_GATE_ORDER = {"RNN": (0,), "GRU": (1, 0, 2), "LSTM": (0, 2, 3, 1)}  # ONN
 @pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
 @pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
 @pytest.mark.parametrize("variant", ["full", "defaults", "partial_states"])  # (initial states, bias)
-@pytest.mark.parametrize("seq_length", [3, 1])
-def test_recurrent_gradients(tmp_path, device, op_type, direction, variant, seq_length):
+# (seq_length, batch): a single time step converts the layouts with views (the output sequence only for a single
+# direction or batch element)
+@pytest.mark.parametrize("seq_length, batch", [(3, 2), (1, 2), (1, 1)])
+def test_recurrent_gradients(tmp_path, device, op_type, direction, variant, seq_length, batch):
     torch = pytest.importorskip("torch")
     _skip_if_unavailable(device)
     if variant == "partial_states" and op_type != "LSTM":
         pytest.skip("only the LSTM has more than one initial state")
     gates = {"RNN": 1, "GRU": 3, "LSTM": 4}[op_type]
     directions = 2 if direction == "bidirectional" else 1
-    input_size, hidden_size, batch = 5, 4, 2
+    input_size, hidden_size = 5, 4
     constants = _recurrent_constants(gates, directions, input_size, hidden_size)
     if variant == "defaults":
         del constants["B"]
@@ -768,6 +770,11 @@ def test_recurrent_gradients(tmp_path, device, op_type, direction, variant, seq_
     )
     loss.backward()
 
+    # forward values, with the ONNX layouts
+    y_expected = y.detach().numpy().reshape(seq_length, batch, directions, hidden_size).transpose(0, 2, 1, 3)
+    np.testing.assert_allclose(outputs["y"].numpy(), y_expected, rtol=1.0e-4, atol=1.0e-5)
+    for name, state in zip(("y_h", "y_c"), final_states):
+        np.testing.assert_allclose(outputs[name].numpy(), state.detach().numpy(), rtol=1.0e-4, atol=1.0e-5)
     for name in ("x", *states):
         np.testing.assert_allclose(arrays[name].grad.numpy(), torch_inputs[name].grad.numpy(), rtol=1.0e-3, atol=1.0e-4)
     cell_module = runtime._operations[0].module
