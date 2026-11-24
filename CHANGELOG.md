@@ -14,13 +14,10 @@
   `(sequence_length, batch_size, features)` input and output sequences
 
 ### Changed
-- Run the `RNN`, `GRU` and `LSTM` nodes of the ONNX inference runtime with sequence-first modules, without converting
-  the input sequence (or, for one direction, the output sequence) between the ONNX and batch-first layouts
-- Store the final hidden state of the `RNN` and `GRU` modules directly from the kernel of the last time step,
-  instead of copying it
+- Improve the performance of the `RNN`, `GRU` and `LSTM` modules and ONNX inference runtime nodes, by avoiding the
+  layout conversions of the ONNX sequences and the copies of the final states
 - Reduce the host overhead of the `GRU`, `GRUCell`, `LSTM` and `LSTMCell` modules by passing their (stacked)
-  parameters to the kernels as they are (instead of creating per-gate views of them at every call), and write the
-  final cell state of the `LSTM` module directly (instead of copying it)
+  parameters to the kernels as they are (instead of creating per-gate views of them at every call)
 - Reduce the host overhead of the ONNX runtime for unary element-wise operators
 
 ## [0.4.1] - 2026-10-18

@@ -38,17 +38,6 @@ def time_step(array: wp.array, t: int, batch_first: bool) -> wp.array:
     return array[:, t] if batch_first else array[t]
 
 
-def overlap(a: wp.array, b: wp.array) -> bool:
-    """Whether the memory spans of two arrays overlap."""
-
-    def span(array: wp.array) -> tuple[int, int]:
-        end = sum((size - 1) * stride for size, stride in zip(array.shape, array.strides))
-        return array.ptr, array.ptr + end + wp.types.type_size_in_bytes(array.dtype)
-
-    (start_a, end_a), (start_b, end_b) = span(a), span(b)
-    return a.device == b.device and start_a < end_b and start_b < end_a
-
-
 def reduction_chunk(config: KernelConfig, size: int) -> int:
     """Get the size of the reduction (K) chunks of a layer's matrix multiplications.
 

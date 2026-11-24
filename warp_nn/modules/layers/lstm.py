@@ -21,6 +21,7 @@ from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
+from warp_nn.utils.ops import overlap
 
 from ._common import reduction_chunk, sequence_shape, time_step
 from .lstm_cell import _create_kernels
@@ -174,8 +175,7 @@ class LSTM(Module):
     def _allocate_output(
         self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
     ) -> tuple[list[wp.array], wp.array, tuple[wp.array, wp.array], tuple[wp.array, wp.array]]:
-        """Allocate the outputs (of each layer), cell states (of each layer, direction and time step, except the last
-        one, whose cell state is written to the final cell state array),
+        """Allocate the outputs (of each layer), cell states (of each layer, direction and time step),
         final hidden and cell states and (default) initial hidden and cell states arrays."""
         num_directions, hidden_size = self._num_directions, self.hidden_size
         output_shape = (batch_size, sequence_length, num_directions * hidden_size)
@@ -233,7 +233,7 @@ class LSTM(Module):
                     raise ValueError(f"Expected a {name} array with shape {hidden_shape}, got {tuple(array.shape)}")
         dtype = input.dtype
         key = (tuple(input.shape), dtype)
-        # cache outputs (of each layer), cell states (of each layer, direction and time step, except the last one),
+        # cache outputs (of each layer), cell states (of each layer, direction and time step),
         # final hidden and cell states and (default) initial hidden and cell states
         outputs, cells, output_hidden, initial_hidden = self.cache.get(
             key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
@@ -243,7 +243,7 @@ class LSTM(Module):
         # launch kernels, one per layer, direction and time step
         # - each time step writes its hidden and cell states to their own slices of the layer output and cell state
         #   arrays (rather than overwriting the same arrays), so that the tape can propagate the gradients through
-        #   the sequence; the last time step writes its cell state to the final cell state array
+        #   the sequence
         config = self.config.adapt(
             (batch_size, hidden_size), self.device, requires_grad=self.requires_grad, policy=AdaptationPolicy.MATMUL
         )
@@ -261,22 +261,30 @@ class LSTM(Module):
                 )
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state, cell = hidden[0][index], hidden[1][index]
-                final_cell = output_hidden[1][index]
-                last = 0 if direction else sequence_length - 1
-                for t in reversed(range(sequence_length)) if direction else range(sequence_length):
-                    # the last time step writes its cell state directly to the final cell state array
-                    output = time_step(layer_output, t, self.batch_first)[:, features]
-                    output_cell = final_cell if t == last else cells[index, t]
+                final_hidden, final_cell = output_hidden[0][index], output_hidden[1][index]
+                steps = list(reversed(range(sequence_length)) if direction else range(sequence_length))
+                # the last time step writes the final hidden and cell states, unless there is no time step, or its
+                # kernel reads an array overlapping them (which the tiles of other blocks may still load): the input
+                # of the last time step or, for a single one, the initial hidden and cell states
+                reads = [time_step(layer_input, steps[-1], self.batch_first), state, cell] if steps else []
+                reads = reads if sequence_length == 1 else reads[:1]
+                store_final = sequence_length > 0 and not any(
+                    overlap(array, final) for array in reads for final in (final_hidden, final_cell)
+                )
+                for step, t in enumerate(steps):
+                    last = step == sequence_length - 1 and store_final
+                    output, output_cell = time_step(layer_output, t, self.batch_first)[:, features], cells[index, t]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
                         inputs=[time_step(layer_input, t, self.batch_first), state, cell, *weights, *biases],
-                        outputs=[output, output_cell],
+                        outputs=[output, output_cell, final_hidden if last else None, final_cell if last else None],
                         device=self.device,
                         block_dim=config.block_dim,
                     )
                     state, cell = output, output_cell
-                # the hidden state of the last time step is part of the output sequence, so it is copied
-                copy(state, output_hidden[0][index])
+                if not store_final:
+                    copy(state, final_hidden)
+                    copy(cell, final_cell)
             layer_input = layer_output
         return outputs[-1], output_hidden

@@ -812,15 +812,16 @@ def test_recurrent_sequence_lengths(tmp_path, device):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
 @pytest.mark.parametrize("seq_length", [1, 3])
-def test_recurrent_layout_conversions(tmp_path, device, direction, seq_length, monkeypatch):
+@pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
+def test_recurrent_layout_conversions(tmp_path, op_type, device, direction, seq_length, monkeypatch):
     _skip_if_unavailable(device)
     directions = 2 if direction == "bidirectional" else 1
-    constants = _recurrent_constants(3, directions, 5, 4)
-    node = helper.make_node(
-        "GRU", ["x", "W", "R", "B"], ["y", "y_h"], hidden_size=4, linear_before_reset=1, direction=direction
-    )
+    constants = _recurrent_constants({"RNN": 1, "GRU": 3, "LSTM": 4}[op_type], directions, 5, 4)
+    outputs = ["y", "y_h", "y_c"] if op_type == "LSTM" else ["y", "y_h"]
+    attributes = {"linear_before_reset": 1} if op_type == "GRU" else {}
+    node = helper.make_node(op_type, ["x", "W", "R", "B"], outputs, hidden_size=4, direction=direction, **attributes)
     x = _uniform((seq_length, 3, 5))
-    model = _make_model([node], {"x": x}, {"y": np.float32, "y_h": np.float32}, constants)
+    model = _make_model([node], {"x": x}, dict.fromkeys(outputs, np.float32), constants)
     runtime = _load(tmp_path, model, device)
 
     launched = []
@@ -832,14 +833,14 @@ def test_recurrent_layout_conversions(tmp_path, device, direction, seq_length, m
 
     monkeypatch.setattr(wp, "launch", counting_launch)
     outputs = runtime({"x": wp.array(x, device=device)})
-    # the sequence-first module neither converts nor copies the input or (for one direction) the output sequence: only
-    # the reverse direction reverses them, and both directions interleave the output sequence
+    # the sequence-first module neither converts nor copies the input, the final states or (for one direction) the
+    # output sequence: only the reverse direction reverses them, and both directions interleave the output sequence
     expected_conversions = {
         "forward": set(),
         "reverse": {reverse_sequence.key, to_onnx_sequence.key},
         "bidirectional": {to_onnx_sequence.key},
     }[direction]
-    conversions = {reverse_sequence.key, to_onnx_sequence.key, _COPY_KERNELS[3].key}
+    conversions = {reverse_sequence.key, to_onnx_sequence.key, _COPY_KERNELS[2].key, _COPY_KERNELS[3].key}
     assert conversions & set(launched) == expected_conversions
     for output, expected in zip(outputs.values(), ReferenceEvaluator(model).run(None, {"x": x})):
         np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)

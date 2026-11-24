@@ -49,6 +49,25 @@ def _copy_4d(input: wp.array4d[Any], output: wp.array4d[Any]):
 _COPY_KERNELS = {1: _copy_1d, 2: _copy_2d, 3: _copy_3d, 4: _copy_4d}
 
 
+def overlap(a: wp.array, b: wp.array) -> bool:
+    """Whether the memory spans of two arrays overlap.
+
+    The check is conservative: interleaved strided views that share no element are also reported as overlapping.
+
+    :param a: The first array.
+    :param b: The second array.
+
+    :return: Whether the arrays may share memory.
+    """
+
+    def span(array: wp.array) -> tuple[int, int]:
+        end = sum((size - 1) * stride for size, stride in zip(array.shape, array.strides))
+        return array.ptr, array.ptr + end + wp.types.type_size_in_bytes(array.dtype)
+
+    (start_a, end_a), (start_b, end_b) = span(a), span(b)
+    return a.device == b.device and start_a < end_b and start_b < end_a
+
+
 def copy(input: wp.array, output: wp.array) -> wp.array:
     """Copy an array into another array with the same shape (any of them can be non-contiguous).
 

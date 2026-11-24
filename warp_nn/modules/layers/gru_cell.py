@@ -88,7 +88,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
             )
         h = wp.tile_map(compute_hidden_state, t_hidden, gate_r, gate_z, gate_in, gate_hn)
         wp.tile_store(output, wp.tile_transpose(h), offset=offset)
-        # the last time step of a sequence also stores the hidden state as the final one (if given)
+        # also store the hidden state into the final hidden state array (if given)
         if final_hidden.shape[0] > 0:
             wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
 

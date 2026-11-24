@@ -55,7 +55,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
             gate_hh += wp.tile_broadcast(wp.tile_load(bias_hh, shape=shape_b, offset=offset_b), shape=shape_T)
         h = wp.tile_map(activation, gate_ih + gate_hh)
         wp.tile_store(output, wp.tile_transpose(h), offset=offset)
-        # the last time step of a sequence also stores the hidden state as the final one (if given)
+        # also store the hidden state into the final hidden state array (if given)
         if final_hidden.shape[0] > 0:
             wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
 

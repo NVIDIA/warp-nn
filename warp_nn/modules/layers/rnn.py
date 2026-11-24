@@ -21,8 +21,9 @@ from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
+from warp_nn.utils.ops import overlap
 
-from ._common import overlap, reduction_chunk, sequence_shape, time_step
+from ._common import reduction_chunk, sequence_shape, time_step
 from .rnn_cell import _create_kernels
 
 
@@ -219,10 +220,13 @@ class RNN(Module):
                 parameters = self._layer_parameters[index]
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state, final_hidden = hidden[index], output_hidden[index]
-                # the last time step writes the final hidden state, unless a single time step reads it as its initial
-                # hidden state (which the tiles of other blocks may still load)
-                store_final = sequence_length > 1 or not overlap(state, final_hidden)
-                steps = reversed(range(sequence_length)) if direction else range(sequence_length)
+                steps = list(reversed(range(sequence_length)) if direction else range(sequence_length))
+                # the last time step writes the final hidden state, unless there is no time step, or its kernel reads
+                # an array overlapping it (which the tiles of other blocks may still load): the input of the last
+                # time step or, for a single one, the initial hidden state
+                reads = [time_step(layer_input, steps[-1], self.batch_first), state] if steps else []
+                reads = reads if sequence_length == 1 else reads[:1]
+                store_final = sequence_length > 0 and not any(overlap(array, final_hidden) for array in reads)
                 for step, t in enumerate(steps):
                     last = step == sequence_length - 1
                     output = time_step(layer_output, t, self.batch_first)[:, features]

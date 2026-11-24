@@ -25,7 +25,14 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
+from .common import (
+    check_forward_rnn,
+    check_gradients_rnn,
+    check_initialize_parameters,
+    check_input_feedback_rnn,
+    check_requires_grad,
+    check_state_feedback_rnn,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -174,6 +181,30 @@ def test_initialize_parameters(capsys, device, bidirectional, bias):
         },
         device=device,
     )
+
+
+@pytest.mark.parametrize("sequence_length", [1, 3])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_state_feedback(capsys, device, sequence_length):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # large enough for several tiles, whose blocks read the whole initial hidden state
+    kwargs = {"num_layers": 2, "bidirectional": True, "batch_first": False}
+    hidden_shape = [2 * 2, 64, 96]
+    check_state_feedback_rnn(
+        warp_module=nn.LSTM(8, 96, **kwargs),
+        device=device,
+        shape=[sequence_length, 64, 8],
+        hidden_shapes=[hidden_shape] * 2,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_input_feedback(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # the final hidden state (1, batch_size, hidden_size) is a valid sequence-first input of one time step
+    check_input_feedback_rnn(warp_module=nn.LSTM(96, 96, batch_first=False), device=device, shape=[1, 64, 96])
 
 
 def test_invalid_arguments(capsys):
