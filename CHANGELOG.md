@@ -18,6 +18,9 @@
 - Reduce the host overhead of the ONNX runtime for unary element-wise operators, and convert the layouts of the
   recurrent operators with views (instead of kernels) for a single time step
 
+### Fixed
+- Fix `Module.load_state_dict()` partially loading arrays smaller than the module's arrays (it raises an error now)
+
 ## [0.4.1] - 2026-10-18
 ### Changed
 - Update default kernel configuration for tiles of 1024 elements
