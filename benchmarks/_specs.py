@@ -167,6 +167,11 @@ def _torch_concatenate(*inputs: torch.Tensor) -> torch.Tensor:
     return torch.cat(inputs, dim=-1)
 
 
+def _torch_transpose(x: torch.Tensor) -> torch.Tensor:
+    # contiguous copy, as the warp-nn module does (rather than PyTorch's strided view)
+    return x.transpose(1, 2).contiguous()
+
+
 def _warp_mlp(nn: ModuleType) -> Any:
     return nn.Sequential(
         nn.Linear(OBSERVATIONS, 512),
@@ -260,6 +265,7 @@ SPECS: tuple[ModuleSpec, ...] = (
     _layer("Identity", lambda nn: nn.Identity(), torch.nn.Identity, _VECTOR),
     _layer("InstanceNorm", lambda nn: nn.InstanceNorm(CHANNELS), lambda: torch.nn.InstanceNorm1d(CHANNELS), _SIGNAL),
     _layer("LayerNorm", lambda nn: nn.LayerNorm(FEATURES), lambda: torch.nn.LayerNorm(FEATURES), _VECTOR),
+    _layer("LazyLinear", lambda nn: nn.LazyLinear(FEATURES), lambda: torch.nn.LazyLinear(FEATURES), _VECTOR),
     _layer("Linear", lambda nn: nn.Linear(FEATURES, FEATURES), lambda: torch.nn.Linear(FEATURES, FEATURES), _VECTOR),
     _layer(
         "LSTM",
@@ -330,4 +336,5 @@ SPECS: tuple[ModuleSpec, ...] = (
     _operator("Sub", torch.sub, _VECTOR, _VECTOR),
     _operator("Tan", torch.tan, _UNIT),
     _operator("Tanh", torch.tanh),
+    _operator("Transpose", _torch_transpose, _SIGNAL, dims=(0, 2, 1)),
 )

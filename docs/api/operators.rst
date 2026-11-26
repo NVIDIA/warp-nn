@@ -40,6 +40,7 @@ Operators
     Sub <operators/sub>
     Tan <operators/tan>
     Tanh <operators/tanh>
+    Transpose <operators/transpose>
 
 Operators are element-wise mathematical operations and array operations.
 
@@ -85,3 +86,4 @@ The following table lists the available operators:
     Sub
     Tan
     Tanh
+    Transpose

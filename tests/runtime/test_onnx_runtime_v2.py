@@ -30,7 +30,6 @@ from tests.utilities import is_device_available
 from warp_nn import nn
 from warp_nn.modules import activations, layers, operators
 from warp_nn.runtime import OnnxRuntime, OnnxTensorSpec
-from warp_nn.utils import cache
 
 
 _OPSET = 24
@@ -248,9 +247,15 @@ _CASES = {
     "Squeeze_opset11": _Case("Squeeze", (), {"x": _uniform((1, 3, 1))}, attributes={"axes": [0]}, opset=11),
     "Tan": _unary("Tan", operators.Tan, x=_uniform((2, 3, 4), -1.0, 1.0)),
     "Tanh": _unary("Tanh", operators.Tanh),
-    "Transpose": _Case("Transpose", (), {"x": _uniform((2, 3, 4))}, attributes={"perm": [2, 0, 1]}),
-    "Transpose_default_perm": _Case("Transpose", (), {"x": _uniform((3, 4))}),
-    "Transpose_unit_axes": _Case("Transpose", (), {"x": _uniform((3, 1, 4))}, attributes={"perm": [1, 0, 2]}),
+    "Transpose": _unary("Transpose", operators.Transpose, perm=[2, 0, 1]),
+    "Transpose_default_perm": _unary("Transpose", operators.Transpose),
+    "Transpose_2d": _unary("Transpose", operators.Transpose, x=_uniform((3, 5)), perm=[1, 0]),
+    "Transpose_4d": _unary("Transpose", operators.Transpose, x=_uniform((2, 3, 4, 5)), perm=[0, 2, 3, 1]),
+    "Transpose_int": _unary("Transpose", operators.Transpose, x=_integers((2, 3, 4), dtype=np.int64), perm=[1, 2, 0]),
+    "Transpose_bool": _unary("Transpose", operators.Transpose, x=_integers((2, 3)) > 0),
+    # the output is a view of the input (no data is moved)
+    "Transpose_size_1_axes": _unary("Transpose", operators.Transpose, x=_uniform((3, 1, 4)), perm=[1, 0, 2]),
+    "Transpose_empty": _unary("Transpose", operators.Transpose, x=_uniform((0, 3, 4)), perm=[2, 0, 1]),
     # combining operators
     "Concat": _Case(
         "Concat", (operators.Concatenate,), {"a": _uniform((2, 3)), "b": _uniform((2, 1))}, attributes={"axis": 1}
@@ -811,28 +816,22 @@ def test_recurrent_sequence_lengths(tmp_path, device):
             np.testing.assert_allclose(output.numpy(), expected, rtol=1.0e-4, atol=1.0e-5)
 
 
-def _stacked_lstm_model(batch=5, num_layers=2, input_size=2, hidden_size=3, batch_first=False):
+def _stacked_lstm_model(batch=5, num_layers=2, input_size=2, hidden_size=3):
     """A multi-layer LSTM with the graph that PyTorch exports: the stacked initial states are split per layer with
-    ``Slice``, and the final states of the layers are joined with ``Concat``. With ``batch_first``, a sequence of
-    3 steps is transposed from and to the batch-first layout with ``Transpose``."""
-    sequence_length = 3 if batch_first else 1
-    x_shape = (batch, sequence_length, input_size) if batch_first else (sequence_length, batch, input_size)
+    ``Slice``, and the final states of the layers are joined with ``Concat``."""
     inputs = {
-        "x": _uniform(x_shape, -1.0, 1.0),
+        "x": _uniform((1, batch, input_size), -1.0, 1.0),
         "h0": _uniform((num_layers, batch, hidden_size), -1.0, 1.0),
         "c0": _uniform((num_layers, batch, hidden_size), -1.0, 1.0),
     }
     constants = {"axes": np.array([0], np.int64), "direction_axis": np.array([1], np.int64)}
     nodes, layer_input = [], "x"
-    if batch_first:
-        nodes.append(helper.make_node("Transpose", ["x"], ["x_sequence_first"], perm=[1, 0, 2]))
-        layer_input = "x_sequence_first"
     for layer in range(num_layers):
         weights = _recurrent_constants(4, 1, input_size if layer == 0 else hidden_size, hidden_size)
         constants |= {f"{name}{layer}": value for name, value in weights.items()}
         constants |= {f"starts{layer}": np.array([layer], np.int64), f"ends{layer}": np.array([layer + 1], np.int64)}
         bounds = [f"starts{layer}", f"ends{layer}", "axes"]
-        output = "y" if layer == num_layers - 1 and not batch_first else f"sequence{layer}"
+        output = "y" if layer == num_layers - 1 else f"sequence{layer}"
         nodes += [
             helper.make_node("Slice", ["h0", *bounds], [f"h0_{layer}"]),
             helper.make_node("Slice", ["c0", *bounds], [f"c0_{layer}"]),
@@ -845,27 +844,24 @@ def _stacked_lstm_model(batch=5, num_layers=2, input_size=2, hidden_size=3, batc
             helper.make_node("Squeeze", [f"y{layer}", "direction_axis"], [output]),
         ]
         layer_input = output
-    if batch_first:
-        nodes.append(helper.make_node("Transpose", [layer_input], ["y"], perm=[1, 0, 2]))
     nodes += [
         helper.make_node("Concat", [f"h_n{layer}" for layer in range(num_layers)], ["h_n"], axis=0),
         helper.make_node("Concat", [f"c_n{layer}" for layer in range(num_layers)], ["c_n"], axis=0),
     ]
     outputs = {"y": np.float32, "h_n": np.float32, "c_n": np.float32}
     # explicit output shapes, since the ONNX reference LSTM of some supported onnx versions does not return Y_c
-    y_shape = (batch, sequence_length, hidden_size) if batch_first else (sequence_length, batch, hidden_size)
-    shapes = (y_shape, (num_layers, batch, hidden_size), (num_layers, batch, hidden_size))
+    shapes = ((1, batch, hidden_size), (num_layers, batch, hidden_size), (num_layers, batch, hidden_size))
     return _make_model(nodes, inputs, outputs, constants, output_shapes=shapes), inputs, constants
 
 
-def _stacked_lstm_reference(torch, constants, num_layers=2, input_size=2, hidden_size=3, batch_first=False):
+def _stacked_lstm_reference(torch, constants, num_layers=2, input_size=2, hidden_size=3):
     """The PyTorch multi-layer LSTM with the weights of :func:`_stacked_lstm_model`."""
     order = _TORCH_GATE_ORDER["LSTM"]
 
     def reorder(value):
         return np.concatenate([value[i * hidden_size : (i + 1) * hidden_size] for i in order])
 
-    module = torch.nn.LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=batch_first).double()
+    module = torch.nn.LSTM(input_size, hidden_size, num_layers=num_layers).double()
     with torch.no_grad():
         for layer in range(num_layers):
             bias_ih, bias_hh = np.split(constants[f"B{layer}"][0], 2)
@@ -881,11 +877,10 @@ def _stacked_lstm_reference(torch, constants, num_layers=2, input_size=2, hidden
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("batch_first", [False, True])
-def test_stacked_lstm(tmp_path, device, batch_first):
+def test_stacked_lstm(tmp_path, device):
     torch = pytest.importorskip("torch")
     _skip_if_unavailable(device)
-    model, inputs, constants = _stacked_lstm_model(batch_first=batch_first)
+    model, inputs, constants = _stacked_lstm_model()
     runtime = _load(tmp_path, model, device, requires_grad=True)
 
     arrays = {name: wp.array(value, device=device, requires_grad=True) for name, value in inputs.items()}
@@ -895,7 +890,7 @@ def test_stacked_lstm(tmp_path, device, batch_first):
     upstream = {name: _uniform(tuple(array.shape), low=-1.0, high=1.0) for name, array in outputs.items()}
     tape.backward(grads={array: wp.array(upstream[name], device=device) for name, array in outputs.items()})
 
-    module = _stacked_lstm_reference(torch, constants, batch_first=batch_first)
+    module = _stacked_lstm_reference(torch, constants)
     torch_inputs = {name: torch.tensor(value, dtype=torch.double, requires_grad=True) for name, value in inputs.items()}
     y, (h_n, c_n) = module(torch_inputs["x"], (torch_inputs["h0"], torch_inputs["c0"]))
     expected = {"y": y, "h_n": h_n, "c_n": c_n}
@@ -942,13 +937,12 @@ def test_non_contiguous_slice(tmp_path, device):
     np.testing.assert_allclose(x.grad.numpy(), expected_grad)
 
 
-@pytest.mark.parametrize("batch_first", [False, True])
-def test_stacked_lstm_cuda_graph_capture(tmp_path, batch_first):
+def test_stacked_lstm_cuda_graph_capture(tmp_path):
     torch = pytest.importorskip("torch")
     _skip_if_unavailable("cuda")
-    model, inputs, constants = _stacked_lstm_model(batch_first=batch_first)
+    model, inputs, constants = _stacked_lstm_model()
     runtime = _load(tmp_path, model, "cuda")
-    module = _stacked_lstm_reference(torch, constants, batch_first=batch_first)
+    module = _stacked_lstm_reference(torch, constants)
 
     arrays = {name: wp.array(value, device="cuda") for name, value in inputs.items()}
     runtime.prepare(arrays)
@@ -984,64 +978,6 @@ def test_non_contiguous_slice_cuda_graph_capture(tmp_path):
         x.assign(value)
         wp.capture_launch(capture.graph)
         np.testing.assert_array_equal(output.numpy(), value[:, 1])
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize(
-    ("shape", "perm", "view"),
-    [((3, 1, 4), [1, 0, 2], True), ((0, 2, 3), [2, 1, 0], True), ((2, 3, 4), [2, 0, 1], False)],
-)
-def test_transpose_view_or_copy(tmp_path, device, shape, perm, view):
-    """A ``Transpose`` that only moves axes of size 1, or of an empty array, is a view of its input; others are copied
-    into a contiguous array."""
-    _skip_if_unavailable(device)
-    inputs = {"x": _uniform(shape)}
-    model = _make_model([helper.make_node("Transpose", ["x"], ["y"], perm=perm)], inputs, {"y": np.float32})
-    runtime = _load(tmp_path, model, device, requires_grad=True)
-    x = wp.array(inputs["x"], device=device, requires_grad=True)
-    tape = wp.Tape()
-    with tape:
-        y = runtime({"x": x})["y"]
-    assert y.is_contiguous
-    assert len(tape.launches) == (0 if view else 1)  # also for empty arrays, which have no pointer
-    assert (y.ptr == x.ptr) == view
-    np.testing.assert_array_equal(y.numpy(), np.transpose(inputs["x"], perm))
-
-
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-@pytest.mark.parametrize("cache_enabled", [True, False])
-def test_transpose_output_passed_back(tmp_path, device, cache_enabled):
-    """Transposing the runtime's own (square) output again gives back the input values, with or without the cache."""
-    _skip_if_unavailable(device)
-    inputs = {"x": _uniform((256, 256))}  # several blocks on CUDA, so that copying in place would race
-    model = _make_model([helper.make_node("Transpose", ["x"], ["y"])], inputs, {"y": np.float32})
-    runtime = _load(tmp_path, model, device)
-    cache.set_enabled(cache_enabled)
-    try:
-        y = runtime({"x": wp.array(inputs["x"], device=device)})["y"]
-        np.testing.assert_array_equal(runtime({"x": y})["y"].numpy(), inputs["x"])
-    finally:
-        cache.set_enabled(True)
-
-
-def test_transpose_output_passed_back_cuda_graph_capture(tmp_path):
-    """Passing a ``Transpose`` output back to the runtime allocates nothing in a CUDA graph capture after ``prepare``."""
-    _skip_if_unavailable("cuda")
-    inputs = {"x": _uniform((256, 256))}
-    model = _make_model([helper.make_node("Transpose", ["x"], ["y"])], inputs, {"y": np.float32})
-    runtime = _load(tmp_path, model, "cuda")
-    x = wp.array(inputs["x"], device="cuda")
-    runtime.prepare({"x": x})
-    y = runtime({"x": x})["y"]
-    mempool = wp.is_mempool_enabled("cuda")
-    wp.set_mempool_enabled("cuda", False)  # an allocation in the capture fails without the memory pool
-    try:
-        with wp.ScopedCapture(device="cuda") as capture:
-            output = runtime({"x": y})["y"]
-    finally:
-        wp.set_mempool_enabled("cuda", mempool)
-    wp.capture_launch(capture.graph)
-    np.testing.assert_array_equal(output.numpy(), inputs["x"])
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -1397,9 +1333,9 @@ _INVALID_SHAPES = {
         ),
         "axes \\(0, -2\\) contain duplicates for input shape \\(2, 3\\)",
     ),
-    "transpose_perm_not_a_permutation": (
-        _Case("Transpose", (), {"x": _uniform((2, 3))}, attributes={"perm": [0, 0]}, output_shapes=((2, 2),)),
-        "perm \\(0, 0\\) is not a permutation of the axes of input shape \\(2, 3\\)",
+    "transpose_perm_wrong_rank": (
+        _Case("Transpose", (), {"x": _uniform((2, 3))}, attributes={"perm": [0, 2, 1]}, output_shapes=((2, 3, 3),)),
+        "not a permutation of the dimensions of 2D arrays",
     ),
     "concat_axis_out_of_range": (
         _Case(
@@ -1498,6 +1434,12 @@ def test_rejects_invalid_shapes_at_runtime(tmp_path, case_id):
     runtime = _load(tmp_path, case.model(), "cpu")
     with pytest.raises(ValueError, match=message):
         runtime({name: wp.array(value, device="cpu") for name, value in case.inputs.items()})
+
+
+def test_rejects_transpose_duplicated_perm(tmp_path):
+    case = _Case("Transpose", (), {"x": _uniform((2, 3))}, attributes={"perm": [0, 0]}, output_shapes=((2, 2),))
+    with pytest.raises(ValueError, match="contain duplicated values"):
+        _load(tmp_path, case.model(), "cpu")
 
 
 def test_rejects_scalar_squeeze_outputs(tmp_path):

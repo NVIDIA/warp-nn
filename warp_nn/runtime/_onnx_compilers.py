@@ -270,54 +270,6 @@ class _SliceOperation(_CachedOperation):
 
 
 @dataclass(eq=False, kw_only=True)
-class _TransposeOperation(_CachedOperation):
-    """Transpose a runtime array.
-
-    If the permutation keeps the order of the axes larger than 1 (e.g. it only moves axes of size 1), or the input is
-    empty, the output is a reshaped view of the (contiguous) input array. Otherwise, the transposed view is copied into
-    a cached array by a kernel recorded on the active tape (if any), since the operations reading it may require
-    contiguous arrays. Two such arrays are cached together (so that both exist before a CUDA graph capture): an input
-    that is (a view of) the first one, e.g. an output passed back to the runtime, is copied into the second one, since
-    copying it into itself would overwrite elements before reading them. If the cache is disabled, a single new array
-    is allocated at every call instead.
-    """
-
-    node: _Node
-    input: str
-    perm: tuple[int, ...] | None  # reverses the axes if not given
-    requires_grad: bool
-
-    @property
-    def modules(self) -> tuple[nn.Module, ...]:
-        return ()
-
-    def __call__(self, tensors: dict[str, wp.array]) -> None:
-        input = tensors[self.input]
-        shape = tuple(input.shape)
-        perm = tuple(reversed(range(len(shape)))) if self.perm is None else self.perm
-        if sorted(perm) != list(range(len(shape))):
-            raise ValueError(
-                f"OnnxRuntime Transpose: perm {perm} is not a permutation of the axes of input shape {shape}"
-            )
-        output_shape = tuple(shape[axis] for axis in perm)
-        moved = [axis for axis in perm if shape[axis] != 1]
-        if input.is_contiguous and (input.size == 0 or moved == sorted(moved)):
-            output = input.reshape(output_shape)
-        else:
-
-            def allocate() -> wp.array:
-                return wp.empty(output_shape, dtype=input.dtype, device=input.device, requires_grad=self.requires_grad)
-
-            if cache.is_enabled():
-                first, second = self.cache.get((output_shape, input.dtype), lambda: (allocate(), allocate()))
-                buffer = second if first.size and first.ptr <= input.ptr < first.ptr + first.capacity else first
-            else:
-                buffer = allocate()  # a new array never overlaps the input
-            output = copy(input.transpose(perm), buffer)
-        tensors[self.node.outputs[0]] = output
-
-
-@dataclass(eq=False, kw_only=True)
 class _ElementwiseOperation(_CachedOperation):
     """Call element-wise modules with multidirectional (NumPy-style) broadcasting of their operands.
 
@@ -1054,17 +1006,13 @@ def _compile_squeeze(node: _Node, context: CompilationContext) -> _Operation:
 
 
 def _compile_transpose(node: _Node, context: CompilationContext) -> _Operation:
-    """Compile an ONNX ``Transpose`` node into a view, which is copied into a cached array if it is not contiguous.
+    """Compile an ONNX ``Transpose`` node into a :class:`Transpose` module.
 
-    Without the ``perm`` attribute, the axes are reversed.
+    Without the ``perm`` attribute, the order of the dimensions is reversed.
     """
     perm = _attributes(node, perm=None)["perm"]
-    return _TransposeOperation(
-        node=node,
-        input=context.tensor(node, 0),
-        perm=None if perm is None else tuple(int(axis) for axis in perm),
-        requires_grad=context.requires_grad,
-    )
+    module = nn.Transpose(perm, requires_grad=context.requires_grad)
+    return _ModuleOperation(node=node, module=module, inputs=(context.tensor(node, 0),))
 
 
 COMPILERS: dict[str, _Compiler] = {
