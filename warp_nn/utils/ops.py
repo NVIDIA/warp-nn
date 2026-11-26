@@ -102,6 +102,29 @@ def contiguous(array: wp.array) -> wp.array:
     return copy(array, wp.empty(array.shape, dtype=array.dtype, device=array.device, requires_grad=array.requires_grad))
 
 
+def overlap(a: wp.array, b: wp.array) -> bool:
+    """Whether the memory spans of two arrays overlap.
+
+    The check is conservative: interleaved strided views that share no element are also reported as overlapping.
+    Empty arrays, and arrays on different devices, never overlap.
+
+    :param a: The first array.
+    :param b: The second array.
+
+    :return: Whether the arrays may share memory.
+    """
+
+    def span(array: wp.array) -> tuple[int, int]:
+        end = sum((size - 1) * stride for size, stride in zip(array.shape, array.strides))
+        return array.ptr, array.ptr + end + wp.types.type_size_in_bytes(array.dtype)
+
+    # empty arrays have no pointer
+    if not a.size or not b.size or a.device != b.device:
+        return False
+    (start_a, end_a), (start_b, end_b) = span(a), span(b)
+    return start_a < end_b and start_b < end_a
+
+
 def resolve_dim(
     *, config: KernelConfig, shape: tuple[int, ...], tiled: bool, dimensions: int | None = None
 ) -> tuple[int, ...]:

@@ -20,7 +20,7 @@ import pytest
 import numpy as np
 import warp as wp
 
-from warp_nn.utils import contiguous, copy, overload_kernels
+from warp_nn.utils import contiguous, copy, overlap, overload_kernels
 
 from .. import utilities
 
@@ -119,3 +119,38 @@ def test_copy(capsys, device, ndim):
 def test_copy_errors(capsys):
     with pytest.raises(ValueError):
         copy(wp.zeros((4, 4), device="cpu"), wp.zeros((2, 2), device="cpu"))
+
+
+def test_overlap(capsys):
+    base = wp.zeros((4, 6), dtype=wp.float32, device="cpu")
+    other = wp.zeros((4, 6), dtype=wp.float32, device="cpu")
+    # the same array, views of it, and overlapping slices
+    assert overlap(base, base)
+    assert overlap(base, base.transpose())
+    assert overlap(base, base.reshape((6, 4)))
+    assert overlap(base[:3], base[2:])
+    assert overlap(base[1], base[:, 2])
+    # disjoint slices (adjacent rows), and a different array
+    assert not overlap(base[:2], base[2:])
+    assert not overlap(base[0], base[1])
+    assert not overlap(base, other)
+    # conservative check: interleaved strided views that share no element
+    assert overlap(base[:, ::2], base[:, 1::2])
+
+
+def test_overlap_empty_arrays(capsys):
+    base = wp.zeros((4, 6), dtype=wp.float32, device="cpu")
+    empty = wp.zeros((0, 6), dtype=wp.float32, device="cpu")
+    # empty arrays have no pointer
+    assert not overlap(empty, base)
+    assert not overlap(base, empty)
+    assert not overlap(empty, empty)
+
+
+def test_overlap_devices(capsys):
+    if not utilities.is_device_available("cuda"):
+        pytest.skip("Device 'cuda' is not available")
+    cpu = wp.zeros((4, 6), dtype=wp.float32, device="cpu")
+    cuda = wp.zeros((4, 6), dtype=wp.float32, device="cuda")
+    assert not overlap(cpu, cuda)
+    assert overlap(cuda, cuda[1:])

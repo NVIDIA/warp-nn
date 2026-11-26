@@ -36,7 +36,7 @@ from benchmarks._benchmark import (
     run_benchmark,
     warm_up_device,
 )
-from benchmarks._specs import SPECS
+from benchmarks._specs import CATEGORIES, SPECS
 from benchmarks._timing import TimingConfig
 
 
@@ -139,6 +139,20 @@ def test_run_benchmark_non_differentiable():
     )
     assert not result.differentiable
     assert set(result.timings) == {"forward"}
+
+
+def test_specs_cover_all_modules():
+    # every module of the nn namespace must be benchmarked (and its spec must build that module)
+    modules = {
+        obj
+        for obj in vars(nn).values()
+        if isinstance(obj, type) and issubclass(obj, nn.Module) and obj is not nn.Module
+    }
+    benchmarked = {type(spec.warp(nn)) for spec in SPECS}
+    assert not modules - benchmarked, f"Modules without benchmark: {sorted(m.__name__ for m in modules - benchmarked)}"
+    names = [spec.name for spec in SPECS]
+    assert len(names) == len(set(names)), "Duplicated benchmark names"
+    assert {spec.category for spec in SPECS} <= set(CATEGORIES)
 
 
 def test_select_specs():

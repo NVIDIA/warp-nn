@@ -18,4 +18,4 @@ from warp_nn.utils.config import AdaptationPolicy, KernelConfig, get_kernel_conf
 from warp_nn.utils.device import parse_device
 from warp_nn.utils.graph import ScopedCapture
 from warp_nn.utils.logging import logger
-from warp_nn.utils.ops import contiguous, copy, overload_kernels, resolve_dim
+from warp_nn.utils.ops import contiguous, copy, overlap, overload_kernels, resolve_dim

@@ -49,3 +49,4 @@ from warp_nn.modules.operators.sqrt import Sqrt
 from warp_nn.modules.operators.sub import Sub
 from warp_nn.modules.operators.tan import Tan
 from warp_nn.modules.operators.tanh import Tanh
+from warp_nn.modules.operators.transpose import Transpose

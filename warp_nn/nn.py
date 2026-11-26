@@ -99,5 +99,6 @@ from warp_nn.modules.operators import (
     Sub,
     Tan,
     Tanh,
+    Transpose,
 )
 from warp_nn.modules.parameter import Parameter
