@@ -101,7 +101,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
         wp.tile_store(output_hidden, wp.tile_transpose(h), offset=offset)
         wp.tile_store(output_cell, wp.tile_transpose(c), offset=offset)
         # also store the hidden and cell states into the final hidden and cell state arrays (if given)
-        if final_hidden.shape[0] > 0:
+        if final_hidden:
             wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
             wp.tile_store(final_cell, wp.tile_transpose(c), offset=offset)
 

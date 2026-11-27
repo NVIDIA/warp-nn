@@ -21,9 +21,8 @@ from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
-from warp_nn.utils.ops import overlap
 
-from ._common import reduction_chunk, sequence_shape, time_step
+from ._common import can_store_final_states, reduction_chunk, step_view
 from .lstm_cell import _create_kernels
 
 
@@ -116,8 +115,7 @@ class LSTM(Module):
         :param bidirectional: Whether each layer processes the sequence in both directions.
         :param batch_first: Whether the input and output sequences are batch-first,
             ``(batch_size, sequence_length, features)``, rather than sequence-first,
-            ``(sequence_length, batch_size, features)``. Unlike PyTorch, it defaults to batch-first.
-            The layout of the hidden and cell states is not affected.
+            ``(sequence_length, batch_size, features)``. The layout of the hidden and cell states is not affected.
         :param bias: Whether to include a bias term.
         :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
             If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
@@ -173,14 +171,13 @@ class LSTM(Module):
             kaiming_uniform(parameter, mode="scale", scale=1.0 / self.hidden_size)
 
     def _allocate_output(
-        self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
+        self, leading_dims: tuple[int, int], hidden_shape: tuple[int, int, int], dtype: type
     ) -> tuple[list[wp.array], wp.array, tuple[wp.array, wp.array], tuple[wp.array, wp.array]]:
         """Allocate the outputs (of each layer), cell states (of each layer, direction and time step),
         final hidden and cell states and (default) initial hidden and cell states arrays."""
         num_directions, hidden_size = self._num_directions, self.hidden_size
-        output_shape = (batch_size, sequence_length, num_directions * hidden_size)
-        if not self.batch_first:
-            output_shape = (sequence_length, batch_size, output_shape[2])
+        batch_size, sequence_length = leading_dims if self.batch_first else (leading_dims[1], leading_dims[0])
+        output_shape = (*leading_dims, num_directions * hidden_size)
         cell_shape = (num_directions * self.num_layers, sequence_length, batch_size, hidden_size)
         return (
             [
@@ -222,7 +219,7 @@ class LSTM(Module):
             raise ValueError(
                 f"Expected an input array with shape ({layout}, {self.input_size}), got {tuple(input.shape)}"
             )
-        batch_size, sequence_length = sequence_shape(input.shape, self.batch_first)
+        batch_size, sequence_length = input.shape[:2] if self.batch_first else (input.shape[1], input.shape[0])
         num_directions, hidden_size = self._num_directions, self.hidden_size
         hidden_shape = (num_directions * self.num_layers, batch_size, hidden_size)
         if hidden is not None:
@@ -236,7 +233,7 @@ class LSTM(Module):
         # cache outputs (of each layer), cell states (of each layer, direction and time step),
         # final hidden and cell states and (default) initial hidden and cell states
         outputs, cells, output_hidden, initial_hidden = self.cache.get(
-            key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
+            key, lambda: self._allocate_output(input.shape[:2], hidden_shape, dtype)
         )
         if hidden is None:
             hidden = initial_hidden
@@ -263,21 +260,22 @@ class LSTM(Module):
                 state, cell = hidden[0][index], hidden[1][index]
                 final_hidden, final_cell = output_hidden[0][index], output_hidden[1][index]
                 steps = list(reversed(range(sequence_length)) if direction else range(sequence_length))
-                # the last time step writes the final hidden and cell states, unless there is no time step, or its
-                # kernel reads an array overlapping them (which the tiles of other blocks may still load): the input
-                # of the last time step or, for a single one, the initial hidden and cell states
-                reads = [time_step(layer_input, steps[-1], self.batch_first), state, cell] if steps else []
-                reads = reads if sequence_length == 1 else reads[:1]
-                store_final = sequence_length > 0 and not any(
-                    overlap(array, final) for array in reads for final in (final_hidden, final_cell)
+                # the last time step writes the final hidden and cell states directly, unless it is not safe (then
+                # they are copied)
+                store_final = can_store_final_states(
+                    layer_input,
+                    steps,
+                    self.batch_first,
+                    initial_states=(state, cell),
+                    final_states=(final_hidden, final_cell),
                 )
                 for step, t in enumerate(steps):
-                    last = step == sequence_length - 1 and store_final
-                    output, output_cell = time_step(layer_output, t, self.batch_first)[:, features], cells[index, t]
+                    last = store_final and step == sequence_length - 1
+                    output, output_cell = step_view(layer_output, t, self.batch_first)[:, features], cells[index, t]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
-                        inputs=[time_step(layer_input, t, self.batch_first), state, cell, *weights, *biases],
+                        inputs=[step_view(layer_input, t, self.batch_first), state, cell, *weights, *biases],
                         outputs=[output, output_cell, final_hidden if last else None, final_cell if last else None],
                         device=self.device,
                         block_dim=config.block_dim,

@@ -350,12 +350,18 @@ class _ElementwiseOperation(_CachedOperation):
 class _RecurrentOperation(_CachedOperation):
     """Execute an ONNX ``RNN``, ``GRU`` or ``LSTM`` node with a single-layer, sequence-first recurrent module.
 
-    The module reads the input sequence in the ONNX layout ``(seq_length, batch_size, input_size)``, and its output
-    sequence of one direction has the memory layout of the ONNX output ``Y``
-    ``(seq_length, num_directions, batch_size, hidden_size)``, so neither of them is converted. Only the reverse
-    direction (without the forward one), which is executed by the forward module on the time-reversed sequence, and
-    the interleaving of the bidirectional output sequence are converted, by differentiable kernels. The final states
-    (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned by the module.
+    The module reads the input sequence ``X`` in its ONNX layout ``(seq_length, batch_size, input_size)``, and its
+    output sequence ``(seq_length, batch_size, num_directions * hidden_size)`` is returned as a view with the ONNX
+    layout of ``Y`` ``(seq_length, num_directions, batch_size, hidden_size)``, without conversion, when:
+
+    - the direction is ``forward`` (the memory layouts match),
+    - the direction is ``reverse`` and there is a single time step (reversing it is a no-op), or
+    - the direction is ``bidirectional`` and there is a single batch element (the memory layouts match).
+
+    Otherwise, the sequences are converted by differentiable kernels: the ``reverse`` direction is executed by the
+    forward module on the time-reversed input sequence, and its output sequence is reversed back (if ``Y`` is
+    requested), and the ``bidirectional`` output sequence (if ``Y`` is requested) is interleaved. The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones
+    returned by the module.
     """
 
     node: _Node
@@ -371,17 +377,23 @@ class _RecurrentOperation(_CachedOperation):
     def _allocate_arrays(
         self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int]
     ) -> tuple[wp.array | None, wp.array | None, tuple[wp.array, ...]]:
-        """Allocate the reversed input (only if reversed), converted output sequence (only if used and converted)
-        and default (zero) initial states arrays."""
+        """Allocate the reversed input (only if reversed), converted output sequence (only if the ONNX output ``Y``
+        is requested and converted) and default (zero) initial states arrays.
+
+        The reversed input and output sequence arrays are allocated (rather than ``None``) only for the conversions to
+        perform (see the class docstring).
+        """
         module = self.module
         num_directions, _, hidden_size = state_shape
+        reverse = self.flip and seq_length > 1
+        convert = bool(self.node.outputs[0]) and (reverse or (num_directions == 2 and batch_size > 1))
         arguments = {"dtype": wp.float32, "device": module.device}
         grad = {"requires_grad": module.requires_grad}
         input = None
-        if self.flip:
+        if reverse:
             input = wp.empty((seq_length, batch_size, module.input_size), **arguments, **grad)
         sequence = None
-        if self.node.outputs[0] and (self.flip or num_directions == 2):
+        if convert:
             sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
         zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
         return input, sequence, zeros
@@ -409,7 +421,8 @@ class _RecurrentOperation(_CachedOperation):
         reversed_input, sequence, zeros = self.cache.get(
             (seq_length, batch_size), lambda: self._allocate_arrays(seq_length, batch_size, state_shape)
         )
-        if self.flip:
+        reverse = reversed_input is not None
+        if reverse:
             wp.launch(
                 reverse_sequence,
                 dim=tuple(input.shape),
@@ -429,13 +442,13 @@ class _RecurrentOperation(_CachedOperation):
             wp.launch(
                 to_onnx_sequence,
                 dim=tuple(sequence.shape),
-                inputs=[output, int(self.flip)],
+                inputs=[output, int(reverse)],
                 outputs=[sequence],
                 device=module.device,
             )
         elif self.node.outputs[0]:
-            # one direction, in order: the module's output sequence has the memory layout of the ONNX one
-            sequence = output.reshape((seq_length, 1, batch_size, hidden_size))
+            # the module's output sequence has the memory layout of the ONNX one
+            sequence = output.reshape((seq_length, num_directions, batch_size, hidden_size))
         for name, array in zip(self.node.outputs, (sequence, *final_states)):
             if name:
                 tensors[name] = array

@@ -21,9 +21,8 @@ from warp_nn.initializers import kaiming_uniform
 from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
-from warp_nn.utils.ops import overlap
 
-from ._common import reduction_chunk, sequence_shape, time_step
+from ._common import can_store_final_states, reduction_chunk, step_view
 from .rnn_cell import _create_kernels
 
 
@@ -100,8 +99,7 @@ class RNN(Module):
         :param bidirectional: Whether each layer processes the sequence in both directions.
         :param batch_first: Whether the input and output sequences are batch-first,
             ``(batch_size, sequence_length, features)``, rather than sequence-first,
-            ``(sequence_length, batch_size, features)``. Unlike PyTorch, it defaults to batch-first.
-            The layout of the hidden state is not affected.
+            ``(sequence_length, batch_size, features)``. The layout of the hidden state is not affected.
         :param bias: Whether to include a bias term.
         :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
             If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
@@ -157,12 +155,10 @@ class RNN(Module):
             kaiming_uniform(parameter, mode="scale", scale=1.0 / self.hidden_size)
 
     def _allocate_output(
-        self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
+        self, leading_dims: tuple[int, int], hidden_shape: tuple[int, int, int], dtype: type
     ) -> tuple[list[wp.array], wp.array, wp.array]:
         """Allocate the outputs (of each layer), final hidden state and (default) initial hidden state arrays."""
-        output_shape = (batch_size, sequence_length, self._num_directions * self.hidden_size)
-        if not self.batch_first:
-            output_shape = (sequence_length, batch_size, output_shape[2])
+        output_shape = (*leading_dims, self._num_directions * self.hidden_size)
         return (
             [
                 wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
@@ -192,7 +188,7 @@ class RNN(Module):
             raise ValueError(
                 f"Expected an input array with shape ({layout}, {self.input_size}), got {tuple(input.shape)}"
             )
-        batch_size, sequence_length = sequence_shape(input.shape, self.batch_first)
+        batch_size, sequence_length = input.shape[:2] if self.batch_first else (input.shape[1], input.shape[0])
         num_directions, hidden_size = self._num_directions, self.hidden_size
         hidden_shape = (num_directions * self.num_layers, batch_size, hidden_size)
         if hidden is not None and tuple(hidden.shape) != hidden_shape:
@@ -201,7 +197,7 @@ class RNN(Module):
         key = (tuple(input.shape), dtype)
         # cache outputs (of each layer), final hidden state and (default) initial hidden state
         outputs, output_hidden, initial_hidden = self.cache.get(
-            key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
+            key, lambda: self._allocate_output(input.shape[:2], hidden_shape, dtype)
         )
         if hidden is None:
             hidden = initial_hidden
@@ -221,27 +217,25 @@ class RNN(Module):
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
                 state, final_hidden = hidden[index], output_hidden[index]
                 steps = list(reversed(range(sequence_length)) if direction else range(sequence_length))
-                # the last time step writes the final hidden state, unless there is no time step, or its kernel reads
-                # an array overlapping it (which the tiles of other blocks may still load): the input of the last
-                # time step or, for a single one, the initial hidden state
-                reads = [time_step(layer_input, steps[-1], self.batch_first), state] if steps else []
-                reads = reads if sequence_length == 1 else reads[:1]
-                store_final = sequence_length > 0 and not any(overlap(array, final_hidden) for array in reads)
+                # the last time step writes the final hidden state directly, unless it is not safe (then it is copied)
+                store_final = can_store_final_states(
+                    layer_input, steps, self.batch_first, initial_states=(state,), final_states=(final_hidden,)
+                )
                 for step, t in enumerate(steps):
-                    last = step == sequence_length - 1
-                    output = time_step(layer_output, t, self.batch_first)[:, features]
+                    last = store_final and step == sequence_length - 1
+                    output = step_view(layer_output, t, self.batch_first)[:, features]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
                         inputs=[
-                            time_step(layer_input, t, self.batch_first),
+                            step_view(layer_input, t, self.batch_first),
                             state,
                             parameters["weight_ih"].data,
                             parameters["weight_hh"].data,
                             parameters["bias_ih"].data if "bias_ih" in parameters else None,
                             parameters["bias_hh"].data if "bias_hh" in parameters else None,
                         ],
-                        outputs=[output, final_hidden if last and store_final else None],
+                        outputs=[output, final_hidden if last else None],
                         device=self.device,
                         block_dim=config.block_dim,
                     )

@@ -693,9 +693,10 @@ _TORCH_GATE_ORDER = {"RNN": (0,), "GRU": (1, 0, 2), "LSTM": (0, 2, 3, 1)}  # ONN
 @pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
 @pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
 @pytest.mark.parametrize("variant", ["full", "defaults", "partial_states"])  # (initial states, bias)
-# (seq_length, batch): a single time step converts the layouts with views (the output sequence only for a single
-# direction or batch element)
-@pytest.mark.parametrize("seq_length, batch", [(3, 2), (1, 2), (1, 1)])
+# (seq_length, batch): the output sequence is a view of the module's one for the forward direction, the reverse
+# direction with a single time step, or the bidirectional direction with a single batch element; it is converted
+# otherwise
+@pytest.mark.parametrize("seq_length, batch", [(3, 2), (3, 1), (1, 2), (1, 1)])
 def test_recurrent_gradients(tmp_path, device, op_type, direction, variant, seq_length, batch):
     torch = pytest.importorskip("torch")
     _skip_if_unavailable(device)
@@ -820,16 +821,17 @@ def test_recurrent_sequence_lengths(tmp_path, device):
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("direction", ["forward", "reverse", "bidirectional"])
+@pytest.mark.parametrize("batch_size", [1, 3])
 @pytest.mark.parametrize("seq_length", [1, 3])
 @pytest.mark.parametrize("op_type", ["RNN", "GRU", "LSTM"])
-def test_recurrent_layout_conversions(tmp_path, op_type, device, direction, seq_length, monkeypatch):
+def test_recurrent_layout_conversions(tmp_path, op_type, device, direction, seq_length, batch_size, monkeypatch):
     _skip_if_unavailable(device)
     directions = 2 if direction == "bidirectional" else 1
     constants = _recurrent_constants({"RNN": 1, "GRU": 3, "LSTM": 4}[op_type], directions, 5, 4)
     outputs = ["y", "y_h", "y_c"] if op_type == "LSTM" else ["y", "y_h"]
     attributes = {"linear_before_reset": 1} if op_type == "GRU" else {}
     node = helper.make_node(op_type, ["x", "W", "R", "B"], outputs, hidden_size=4, direction=direction, **attributes)
-    x = _uniform((seq_length, 3, 5))
+    x = _uniform((seq_length, batch_size, 5))
     model = _make_model([node], {"x": x}, dict.fromkeys(outputs, np.float32), constants)
     runtime = _load(tmp_path, model, device)
 
@@ -843,11 +845,12 @@ def test_recurrent_layout_conversions(tmp_path, op_type, device, direction, seq_
     monkeypatch.setattr(wp, "launch", counting_launch)
     outputs = runtime({"x": wp.array(x, device=device)})
     # the sequence-first module neither converts nor copies the input, the final states or (for one direction) the
-    # output sequence: only the reverse direction reverses them, and both directions interleave the output sequence
+    # output sequence: only the reverse direction reverses them (unless there is a single time step), and both
+    # directions interleave the output sequence (unless there is a single batch element)
     expected_conversions = {
         "forward": set(),
-        "reverse": {reverse_sequence.key, to_onnx_sequence.key},
-        "bidirectional": {to_onnx_sequence.key},
+        "reverse": {reverse_sequence.key, to_onnx_sequence.key} if seq_length > 1 else set(),
+        "bidirectional": {to_onnx_sequence.key} if batch_size > 1 else set(),
     }[direction]
     conversions = {reverse_sequence.key, to_onnx_sequence.key, _COPY_KERNELS[2].key, _COPY_KERNELS[3].key}
     assert conversions & set(launched) == expected_conversions
