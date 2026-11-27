@@ -52,8 +52,7 @@ class Max(Module):
 
             \text{Max}(a, b) = \max(a, b)
 
-        NaN values are propagated, and the gradient is split evenly between the inputs when they are equal
-        (as PyTorch's ``maximum`` does).
+        NaN values are propagated, and the gradient is split evenly between the inputs when they are equal.
 
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """

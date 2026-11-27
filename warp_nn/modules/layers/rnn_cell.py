@@ -40,6 +40,7 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
         bias_ih: wp.array2d[float],
         bias_hh: wp.array2d[float],
         output: wp.array2d[float],
+        final_hidden: wp.array2d[float],
     ):
         i, j = wp.tid()
         offset = (i * wp.static(config.tile_2d[0]), j * wp.static(config.tile_2d[1]))
@@ -52,7 +53,11 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
             offset_b = (j * wp.static(config.tile_2d[1]), 0)
             gate_ih += wp.tile_broadcast(wp.tile_load(bias_ih, shape=shape_b, offset=offset_b), shape=shape_T)
             gate_hh += wp.tile_broadcast(wp.tile_load(bias_hh, shape=shape_b, offset=offset_b), shape=shape_T)
-        wp.tile_store(output, wp.tile_transpose(wp.tile_map(activation, gate_ih + gate_hh)), offset=offset)
+        h = wp.tile_map(activation, gate_ih + gate_hh)
+        wp.tile_store(output, wp.tile_transpose(h), offset=offset)
+        # also store the hidden state into the final hidden state array (if given)
+        if final_hidden:
+            wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
 
     return kernel
 
@@ -190,7 +195,7 @@ class RNNCell(Module):
                 self.bias_ih.data if self.bias_ih else None,
                 self.bias_hh.data if self.bias_hh else None,
             ],
-            outputs=[output],
+            outputs=[output, None],
             device=self.device,
             block_dim=config.block_dim,
         )

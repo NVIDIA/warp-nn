@@ -15,7 +15,7 @@
 
 import warp as wp
 
-from warp_nn.utils import KernelConfig
+from warp_nn.utils import KernelConfig, overlap
 
 
 def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...]:
@@ -26,6 +26,39 @@ def expand_tuple(value: int | tuple[int, ...], *, length: int) -> tuple[int, ...
     elif isinstance(value, int):
         return (value,) * length
     raise TypeError(f"Expected a tuple or int, got {type(value)}")
+
+
+def step_view(array: wp.array, t: int, batch_first: bool) -> wp.array:
+    """Get the ``(batch_size, features)`` view of the time step ``t`` of a sequence array, in the given layout."""
+    return array[:, t] if batch_first else array[t]
+
+
+def can_store_final_states(
+    input: wp.array,
+    steps: list[int],
+    batch_first: bool,
+    *,
+    initial_states: tuple[wp.array, ...],
+    final_states: tuple[wp.array, ...],
+) -> bool:
+    """Whether the kernel of the last time step of a recurrent layer can store the final states directly.
+
+    It cannot if there is no time step, or if the kernel reads an array overlapping the final states (which the tiles
+    of other blocks may still load while they are stored): the input of the last time step or, for a single time
+    step, the initial states. Otherwise, the final states must be copied after the last time step.
+
+    :param input: The layer's input sequence array.
+    :param steps: The time steps of the layer's direction, in processing order.
+    :param batch_first: Whether the input sequence is batch-first.
+    :param initial_states: The initial states (of the layer's direction) read by the first time step.
+    :param final_states: The final states (of the layer's direction) to be stored.
+
+    :return: Whether the last time step can store the final states.
+    """
+    if not steps:
+        return False
+    reads = (step_view(input, steps[-1], batch_first), *(initial_states if len(steps) == 1 else ()))
+    return not any(overlap(read, final) for read in reads for final in final_states)
 
 
 def reduction_chunk(config: KernelConfig, size: int) -> int:

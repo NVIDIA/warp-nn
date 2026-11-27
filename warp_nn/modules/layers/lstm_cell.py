@@ -54,6 +54,8 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
         bias_hh: wp.array2d[float],  # (4 * hidden_size, 1)
         output_hidden: wp.array2d[float],
         output_cell: wp.array2d[float],
+        final_hidden: wp.array2d[float],
+        final_cell: wp.array2d[float],
     ):
         i, j = wp.tid()
         hidden_size = output_hidden.shape[1]
@@ -98,6 +100,10 @@ def _create_kernels(config: KernelConfig, *, include_bias: bool, residual_dim: i
         h = wp.tile_map(compute_hidden_state, c_h, gate_o)
         wp.tile_store(output_hidden, wp.tile_transpose(h), offset=offset)
         wp.tile_store(output_cell, wp.tile_transpose(c), offset=offset)
+        # also store the hidden and cell states into the final hidden and cell state arrays (if given)
+        if final_hidden:
+            wp.tile_store(final_hidden, wp.tile_transpose(h), offset=offset)
+            wp.tile_store(final_cell, wp.tile_transpose(c), offset=offset)
 
     return kernel
 
@@ -255,7 +261,7 @@ class LSTMCell(Module):
                 self.bias_ih.data if self.bias_ih else None,
                 self.bias_hh.data if self.bias_hh else None,
             ],
-            outputs=[output[0], output[1]],
+            outputs=[output[0], output[1], None, None],
             device=self.device,
             block_dim=config.block_dim,
         )

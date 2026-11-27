@@ -11,13 +11,15 @@
 - Adapt the tiles and block dimension of the tiled kernels to the launched arrays (`adaptive` kernel configuration), and
   add the `KernelConfig.adapt` method and `AdaptationPolicy` class to adapt them for custom kernels
 - Add the `kernels` property to modules, to set their kernel factory and get their kernels by kernel configuration
+- Add the `batch_first` argument to the `RNN`, `GRU` and `LSTM` modules, to process sequence-first
+  `(sequence_length, batch_size, features)` input and output sequences
 
 ### Changed
+- Improve the performance of the `RNN`, `GRU` and `LSTM` modules and ONNX inference runtime nodes, by avoiding the
+  layout conversions of the ONNX sequences and the copies of the final states
 - Reduce the host overhead of the `GRU`, `GRUCell`, `LSTM` and `LSTMCell` modules by passing their (stacked)
-  parameters to the kernels as they are (instead of creating per-gate views of them at every call), and write the
-  final cell state of the `LSTM` module directly (instead of copying it)
-- Reduce the host overhead of the ONNX runtime for unary element-wise operators, and convert the layouts of the
-  recurrent operators with views (instead of kernels) for a single time step
+  parameters to the kernels as they are (instead of creating per-gate views of them at every call)
+- Reduce the host overhead of the ONNX runtime for unary element-wise operators
 
 ## [0.4.1] - 2026-10-18
 ### Changed

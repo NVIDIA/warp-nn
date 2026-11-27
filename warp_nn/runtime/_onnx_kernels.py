@@ -13,28 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Differentiable layout conversion kernels between the ONNX recurrent layouts and the Warp-NN recurrent modules."""
+"""Differentiable layout conversion kernels between the ONNX recurrent layouts and the Warp-NN recurrent modules.
+
+The modules run sequence-first (as the ONNX layout), so only the reverse direction and the interleaving of the
+bidirectional output sequence need a conversion.
+"""
 
 import warp as wp
 
 
 @wp.kernel(grid_stride=False)
-def sequence_first_to_batch_first(input: wp.array3d[wp.float32], reverse: int, output: wp.array3d[wp.float32]):
-    """Convert an input sequence ``(seq_length, batch_size, features)`` into ``(batch_size, seq_length, features)``,
-    optionally reversing the order of the time steps."""
+def reverse_sequence(input: wp.array3d[wp.float32], output: wp.array3d[wp.float32]):
+    """Reverse the order of the time steps of a sequence-first sequence ``(seq_length, batch_size, features)``."""
     t, b, i = wp.tid()
-    if reverse != 0:
-        output[b, input.shape[0] - 1 - t, i] = input[t, b, i]
-    else:
-        output[b, t, i] = input[t, b, i]
+    output[input.shape[0] - 1 - t, b, i] = input[t, b, i]
 
 
 @wp.kernel(grid_stride=False)
-def batch_first_to_onnx_sequence(input: wp.array3d[wp.float32], reverse: int, output: wp.array4d[wp.float32]):
-    """Convert an output sequence ``(batch_size, seq_length, num_directions * hidden_size)`` into the ONNX layout
+def to_onnx_sequence(input: wp.array3d[wp.float32], reverse: int, output: wp.array4d[wp.float32]):
+    """Convert an output sequence ``(seq_length, batch_size, num_directions * hidden_size)`` into the ONNX layout
     ``(seq_length, num_directions, batch_size, hidden_size)``, optionally reversing the order of the time steps."""
     t, d, b, h = wp.tid()
     if reverse != 0:
-        output[t, d, b, h] = input[b, output.shape[0] - 1 - t, d * output.shape[3] + h]
+        output[t, d, b, h] = input[output.shape[0] - 1 - t, b, d * output.shape[3] + h]
     else:
-        output[t, d, b, h] = input[b, t, d * output.shape[3] + h]
+        output[t, d, b, h] = input[t, b, d * output.shape[3] + h]

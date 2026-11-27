@@ -27,7 +27,7 @@ import numpy as np
 import warp as wp
 
 from warp_nn import nn
-from warp_nn.runtime._onnx_kernels import batch_first_to_onnx_sequence, sequence_first_to_batch_first
+from warp_nn.runtime._onnx_kernels import reverse_sequence, to_onnx_sequence
 from warp_nn.utils import cache
 from warp_nn.utils.ops import copy
 
@@ -348,14 +348,20 @@ class _ElementwiseOperation(_CachedOperation):
 
 @dataclass(eq=False, kw_only=True)
 class _RecurrentOperation(_CachedOperation):
-    """Execute an ONNX ``RNN``, ``GRU`` or ``LSTM`` node with a single-layer recurrent module.
+    """Execute an ONNX ``RNN``, ``GRU`` or ``LSTM`` node with a single-layer, sequence-first recurrent module.
 
-    The module processes batch-first sequences, so the input is converted from the ONNX layout
-    ``(seq_length, batch_size, input_size)`` and the output sequence ``Y`` (only if it is used) is converted to
-    ``(seq_length, num_directions, batch_size, hidden_size)``, by differentiable kernels (or by views, for a single
-    time step, which is the common case of recurrent policies stepped once per call). The reverse direction
-    (without the forward one) is executed by the forward module, reversing the time steps of the input and output.
-    The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones returned by the module.
+    The module reads the input sequence ``X`` in its ONNX layout ``(seq_length, batch_size, input_size)``, and its
+    output sequence ``(seq_length, batch_size, num_directions * hidden_size)`` is returned as a view with the ONNX
+    layout of ``Y`` ``(seq_length, num_directions, batch_size, hidden_size)``, without conversion, when:
+
+    - the direction is ``forward`` (the memory layouts match),
+    - the direction is ``reverse`` and there is a single time step (reversing it is a no-op), or
+    - the direction is ``bidirectional`` and there is a single batch element (the memory layouts match).
+
+    Otherwise, the sequences are converted by differentiable kernels: the ``reverse`` direction is executed by the
+    forward module on the time-reversed input sequence, and its output sequence is reversed back (if ``Y`` is
+    requested), and the ``bidirectional`` output sequence (if ``Y`` is requested) is interleaved. The final states (``Y_h`` and, for LSTM, ``Y_c``) are the ones
+    returned by the module.
     """
 
     node: _Node
@@ -368,29 +374,29 @@ class _RecurrentOperation(_CachedOperation):
     def modules(self) -> tuple[nn.Module, ...]:
         return (self.module,)
 
-    def _allocate_output(
-        self,
-        seq_length: int,
-        batch_size: int,
-        state_shape: tuple[int, int, int],
-        *,
-        view_input: bool,
-        view_output: bool,
+    def _allocate_arrays(
+        self, seq_length: int, batch_size: int, state_shape: tuple[int, int, int]
     ) -> tuple[wp.array | None, wp.array | None, tuple[wp.array, ...]]:
-        """Allocate the batch-first input (unless it is a view of the input), output sequence (only if used, and
-        unless it is a view of the module output) and default (zero) initial states arrays."""
+        """Allocate the reversed input (only if reversed), converted output sequence (only if the ONNX output ``Y``
+        is requested and converted) and default (zero) initial states arrays.
+
+        The reversed input and output sequence arrays are allocated (rather than ``None``) only for the conversions to
+        perform (see the class docstring).
+        """
         module = self.module
         num_directions, _, hidden_size = state_shape
+        reverse = self.flip and seq_length > 1
+        convert = bool(self.node.outputs[0]) and (reverse or (num_directions == 2 and batch_size > 1))
         arguments = {"dtype": wp.float32, "device": module.device}
         grad = {"requires_grad": module.requires_grad}
-        batch_first = None
-        if not view_input:
-            batch_first = wp.empty((batch_size, seq_length, module.input_size), **arguments, **grad)
+        input = None
+        if reverse:
+            input = wp.empty((seq_length, batch_size, module.input_size), **arguments, **grad)
         sequence = None
-        if self.node.outputs[0] and not view_output:
+        if convert:
             sequence = wp.empty((seq_length, num_directions, batch_size, hidden_size), **arguments, **grad)
         zeros = tuple(wp.zeros(state_shape, **arguments) for _ in self.initial_states)
-        return batch_first, sequence, zeros
+        return input, sequence, zeros
 
     def __call__(self, tensors: dict[str, wp.array]) -> None:
         module = self.module
@@ -411,46 +417,38 @@ class _RecurrentOperation(_CachedOperation):
                     f"OnnxRuntime {self.node.op_type}: initial state '{name}' must have shape {state_shape}, "
                     f"got {tuple(initial_state.shape)}"
                 )
-        # a single time step has the same memory layout in the sequence-first and batch-first layouts (and the output
-        # sequence has the ONNX layout for a single direction or batch element), so the layout conversions are views
-        # rather than kernel launches (reversing a single time step is a no-op)
-        view_input = seq_length == 1 and input.is_contiguous
-        view_output = seq_length == 1 and (num_directions == 1 or batch_size == 1)
-        # cache the batch-first input, output sequence (only if used) and default (zero) initial states
-        batch_first, sequence, zeros = self.cache.get(
-            (seq_length, batch_size, view_input),
-            lambda: self._allocate_output(
-                seq_length, batch_size, state_shape, view_input=view_input, view_output=view_output
-            ),
+        # cache the reversed input and converted output sequence (only if needed) and default (zero) initial states
+        reversed_input, sequence, zeros = self.cache.get(
+            (seq_length, batch_size), lambda: self._allocate_arrays(seq_length, batch_size, state_shape)
         )
-        reverse = int(self.flip)
-        if view_input:
-            batch_first = input.reshape((batch_size, seq_length, input_size))
-        else:
+        reverse = reversed_input is not None
+        if reverse:
             wp.launch(
-                sequence_first_to_batch_first,
+                reverse_sequence,
                 dim=tuple(input.shape),
-                inputs=[input, reverse],
-                outputs=[batch_first],
+                inputs=[input],
+                outputs=[reversed_input],
                 device=module.device,
             )
+            input = reversed_input
         hidden = None
         if any(state is not None for state in initial_states):
             hidden = tuple(zero if state is None else state for state, zero in zip(initial_states, zeros))
             hidden = hidden if len(hidden) > 1 else hidden[0]
-        output, final_states = module(batch_first, hidden)
+        output, final_states = module(input, hidden)
         if not isinstance(final_states, tuple):
             final_states = (final_states,)
-        if self.node.outputs[0] and view_output:
-            sequence = output.reshape((seq_length, num_directions, batch_size, hidden_size))
-        elif sequence is not None:
+        if sequence is not None:
             wp.launch(
-                batch_first_to_onnx_sequence,
+                to_onnx_sequence,
                 dim=tuple(sequence.shape),
-                inputs=[output, reverse],
+                inputs=[output, int(reverse)],
                 outputs=[sequence],
                 device=module.device,
             )
+        elif self.node.outputs[0]:
+            # the module's output sequence has the memory layout of the ONNX one
+            sequence = output.reshape((seq_length, num_directions, batch_size, hidden_size))
         for name, array in zip(self.node.outputs, (sequence, *final_states)):
             if name:
                 tensors[name] = array
@@ -829,6 +827,7 @@ def _compile_recurrent(node: _Node, context: CompilationContext) -> _Operation:
         weight_ih.shape[-1],
         hidden_size,
         bidirectional=len(reverse) == 2,
+        batch_first=False,
         bias=bias is not None,
         initialize_parameters=False,
         requires_grad=context.requires_grad,

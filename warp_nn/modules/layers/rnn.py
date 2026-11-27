@@ -22,7 +22,7 @@ from warp_nn.modules.module import Module
 from warp_nn.modules.parameter import Parameter
 from warp_nn.utils import AdaptationPolicy, copy, resolve_dim
 
-from ._common import reduction_chunk
+from ._common import can_store_final_states, reduction_chunk, step_view
 from .rnn_cell import _create_kernels
 
 
@@ -34,6 +34,7 @@ class RNN(Module):
         *,
         num_layers: int = 1,
         bidirectional: bool = False,
+        batch_first: bool = True,
         bias: bool = True,
         initialize_parameters: bool = True,
         requires_grad: bool = True,
@@ -96,6 +97,9 @@ class RNN(Module):
         :param hidden_size: The number of hidden features.
         :param num_layers: The number of stacked recurrent layers.
         :param bidirectional: Whether each layer processes the sequence in both directions.
+        :param batch_first: Whether the input and output sequences are batch-first,
+            ``(batch_size, sequence_length, features)``, rather than sequence-first,
+            ``(sequence_length, batch_size, features)``. The layout of the hidden state is not affected.
         :param bias: Whether to include a bias term.
         :param initialize_parameters: Whether to initialize the parameters with their default/initial values.
             If false, the parameters are left as uninitialized memory, and reading them (e.g. during a forward pass)
@@ -111,6 +115,7 @@ class RNN(Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.bidirectional = bidirectional
+        self.batch_first = batch_first
         self._num_directions = 2 if bidirectional else 1
         # create/register parameters, per layer and direction
         # - list of {"weight_ih": ..., "weight_hh": ..., "bias_ih": ..., "bias_hh": ...},
@@ -150,10 +155,10 @@ class RNN(Module):
             kaiming_uniform(parameter, mode="scale", scale=1.0 / self.hidden_size)
 
     def _allocate_output(
-        self, batch_size: int, sequence_length: int, hidden_shape: tuple[int, int, int], dtype: type
+        self, leading_dims: tuple[int, int], hidden_shape: tuple[int, int, int], dtype: type
     ) -> tuple[list[wp.array], wp.array, wp.array]:
         """Allocate the outputs (of each layer), final hidden state and (default) initial hidden state arrays."""
-        output_shape = (batch_size, sequence_length, self._num_directions * self.hidden_size)
+        output_shape = (*leading_dims, self._num_directions * self.hidden_size)
         return (
             [
                 wp.empty(output_shape, dtype=dtype, device=self.device, requires_grad=self.requires_grad)
@@ -166,22 +171,24 @@ class RNN(Module):
     def __call__(self, input: wp.array, hidden: wp.array | None = None) -> tuple[wp.array, wp.array]:
         """Forward pass of the module.
 
-        :param input: The input sequence array, with shape ``(batch_size, sequence_length, input_size)``.
+        :param input: The input sequence array, with shape ``(batch_size, sequence_length, input_size)``,
+            or ``(sequence_length, batch_size, input_size)`` if ``batch_first`` is false.
         :param hidden: The initial hidden state array, with shape ``(D * num_layers, batch_size, hidden_size)``.
             If not given, it defaults to zeros.
 
         :return: A tuple of the output sequence array (the hidden states of the last layer for each element in the
-            sequence), with shape ``(batch_size, sequence_length, D * hidden_size)``, and the final hidden state
+            sequence), with shape ``(batch_size, sequence_length, D * hidden_size)``, or
+            ``(sequence_length, batch_size, D * hidden_size)`` if ``batch_first`` is false, and the final hidden state
             array (of each layer and direction), with shape ``(D * num_layers, batch_size, hidden_size)``.
 
         :raises ValueError: If the shape of the input or hidden state array is not valid.
         """
         if input.ndim != 3 or input.shape[2] != self.input_size:
+            layout = "batch_size, sequence_length" if self.batch_first else "sequence_length, batch_size"
             raise ValueError(
-                f"Expected an input array with shape (batch_size, sequence_length, {self.input_size}), "
-                f"got {tuple(input.shape)}"
+                f"Expected an input array with shape ({layout}, {self.input_size}), got {tuple(input.shape)}"
             )
-        batch_size, sequence_length, _ = input.shape
+        batch_size, sequence_length = input.shape[:2] if self.batch_first else (input.shape[1], input.shape[0])
         num_directions, hidden_size = self._num_directions, self.hidden_size
         hidden_shape = (num_directions * self.num_layers, batch_size, hidden_size)
         if hidden is not None and tuple(hidden.shape) != hidden_shape:
@@ -190,7 +197,7 @@ class RNN(Module):
         key = (tuple(input.shape), dtype)
         # cache outputs (of each layer), final hidden state and (default) initial hidden state
         outputs, output_hidden, initial_hidden = self.cache.get(
-            key, lambda: self._allocate_output(batch_size, sequence_length, hidden_shape, dtype)
+            key, lambda: self._allocate_output(input.shape[:2], hidden_shape, dtype)
         )
         if hidden is None:
             hidden = initial_hidden
@@ -208,25 +215,32 @@ class RNN(Module):
                 index = layer * num_directions + direction
                 parameters = self._layer_parameters[index]
                 features = slice(direction * hidden_size, (direction + 1) * hidden_size)
-                state = hidden[index]
-                for t in reversed(range(sequence_length)) if direction else range(sequence_length):
-                    output = layer_output[:, t, features]
+                state, final_hidden = hidden[index], output_hidden[index]
+                steps = list(reversed(range(sequence_length)) if direction else range(sequence_length))
+                # the last time step writes the final hidden state directly, unless it is not safe (then it is copied)
+                store_final = can_store_final_states(
+                    layer_input, steps, self.batch_first, initial_states=(state,), final_states=(final_hidden,)
+                )
+                for step, t in enumerate(steps):
+                    last = store_final and step == sequence_length - 1
+                    output = step_view(layer_output, t, self.batch_first)[:, features]
                     wp.launch_tiled(
                         kernel,
                         dim=dim,
                         inputs=[
-                            layer_input[:, t],
+                            step_view(layer_input, t, self.batch_first),
                             state,
                             parameters["weight_ih"].data,
                             parameters["weight_hh"].data,
                             parameters["bias_ih"].data if "bias_ih" in parameters else None,
                             parameters["bias_hh"].data if "bias_hh" in parameters else None,
                         ],
-                        outputs=[output],
+                        outputs=[output, final_hidden if last else None],
                         device=self.device,
                         block_dim=config.block_dim,
                     )
                     state = output
-                copy(state, output_hidden[index])
+                if not store_final:
+                    copy(state, final_hidden)
             layer_input = layer_output
         return outputs[-1], output_hidden

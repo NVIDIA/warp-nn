@@ -52,8 +52,7 @@ class Min(Module):
 
             \text{Min}(a, b) = \min(a, b)
 
-        NaN values are propagated, and the gradient is split evenly between the inputs when they are equal
-        (as PyTorch's ``minimum`` does).
+        NaN values are propagated, and the gradient is split evenly between the inputs when they are equal.
 
         :param requires_grad: Whether the cached output arrays of the module require gradients.
         """

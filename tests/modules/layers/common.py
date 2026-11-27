@@ -162,6 +162,50 @@ def check_gradients_rnn(
         utilities.check_arrays(torch_grad, warp_grad, flatten=True, rtol=rtol, atol=atol * scale)
 
 
+def check_state_feedback_rnn(*, warp_module, device, shape, hidden_shapes: list, steps: int = 4):
+    # feed the final states of a multi-layer recurrent module back as its next initial states, as the same arrays
+    # (as in ``output, hidden = module(input, hidden)``) and as copies, and check that both give the same outputs
+    warp_module.to(device)
+    utilities.init_parameters(warp_module.parameters(as_array=True))
+    inputs = [wp.array(utilities.sample_array(shape), device=device) for _ in range(steps)]
+    initial = [utilities.sample_array(hidden_shape) for hidden_shape in hidden_shapes]
+    results = []
+    for aliased in (False, True):
+        hidden = tuple(wp.array(array, device=device) for array in initial)
+        outputs = []
+        for input in inputs:
+            output, hidden = warp_module(input, hidden if len(hidden) > 1 else hidden[0])
+            hidden = hidden if isinstance(hidden, tuple) else (hidden,)
+            outputs.append([array.numpy().copy() for array in (output, *hidden)])
+            if not aliased:
+                hidden = tuple(wp.clone(array) for array in hidden)
+        results.append(outputs)
+    for expected, actual in zip(*results):
+        for a, b in zip(expected, actual):
+            np.testing.assert_allclose(b, a, rtol=0.0, atol=1e-6)
+
+
+def check_input_feedback_rnn(*, warp_module, device, shape, steps: int = 4):
+    # feed the final hidden state of a single-layer, single-direction recurrent module back as its next input sequence
+    # of one time step, as the same array and as a copy, and check that both give the same outputs
+    warp_module.to(device)
+    utilities.init_parameters(warp_module.parameters(as_array=True))
+    initial = utilities.sample_array(shape)
+    results = []
+    for aliased in (False, True):
+        input = wp.array(initial, device=device)
+        outputs = []
+        for _ in range(steps):
+            output, hidden = warp_module(input)
+            hidden = hidden[0] if isinstance(hidden, tuple) else hidden
+            outputs.append([array.numpy().copy() for array in (output, hidden)])
+            input = hidden if aliased else wp.clone(hidden)
+        results.append(outputs)
+    for expected, actual in zip(*results):
+        for a, b in zip(expected, actual):
+            np.testing.assert_allclose(b, a, rtol=0.0, atol=1e-6)
+
+
 def check_requires_grad(*, warp_module, device, inputs, requires_grad: bool):
     # move module to target device
     warp_module.to(device)

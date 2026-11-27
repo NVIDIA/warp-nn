@@ -25,7 +25,14 @@ import warp as wp
 import warp_nn.nn as nn
 
 from ... import utilities
-from .common import check_forward_rnn, check_gradients_rnn, check_initialize_parameters, check_requires_grad
+from .common import (
+    check_forward_rnn,
+    check_gradients_rnn,
+    check_initialize_parameters,
+    check_input_feedback_rnn,
+    check_requires_grad,
+    check_state_feedback_rnn,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +62,7 @@ def _disable_cudnn_and_tf32():
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("bidirectional", [False, True])
+@pytest.mark.parametrize("batch_first", [True, False])
 # test-specific parameters
 @pytest.mark.parametrize("initial_hidden", [True, False])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -62,6 +70,7 @@ def test_forward(
     capsys,
     device,
     initial_hidden,
+    batch_first,
     bidirectional,
     bias,
     batch_size,
@@ -73,12 +82,12 @@ def test_forward(
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     num_directions = 2 if bidirectional else 1
-    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "bias": bias}
+    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "batch_first": batch_first, "bias": bias}
     check_forward_rnn(
         warp_module=nn.LSTM(input_size, hidden_size, **kwargs),
-        torch_module=torch.nn.LSTM(input_size, hidden_size, batch_first=True, **kwargs),
+        torch_module=torch.nn.LSTM(input_size, hidden_size, **kwargs),
         device=device,
-        shape=[batch_size, sequence_length, input_size],
+        shape=[batch_size, sequence_length, input_size] if batch_first else [sequence_length, batch_size, input_size],
         hidden_shapes=[[num_directions * num_layers, batch_size, hidden_size]] * 2 if initial_hidden else None,
     )
 
@@ -99,6 +108,7 @@ def test_forward(
 # module-specific parameters
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("bidirectional", [False, True])
+@pytest.mark.parametrize("batch_first", [True, False])
 # test-specific parameters
 @pytest.mark.parametrize("initial_hidden", [True, False])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -106,6 +116,7 @@ def test_gradients(
     capsys,
     device,
     initial_hidden,
+    batch_first,
     bidirectional,
     bias,
     batch_size,
@@ -117,12 +128,12 @@ def test_gradients(
     if not utilities.is_device_available(device):
         pytest.skip(f"Device '{device}' is not available")
     num_directions = 2 if bidirectional else 1
-    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "bias": bias}
+    kwargs = {"num_layers": num_layers, "bidirectional": bidirectional, "batch_first": batch_first, "bias": bias}
     check_gradients_rnn(
         warp_module=nn.LSTM(input_size, hidden_size, **kwargs),
-        torch_module=torch.nn.LSTM(input_size, hidden_size, batch_first=True, **kwargs),
+        torch_module=torch.nn.LSTM(input_size, hidden_size, **kwargs),
         device=device,
-        shape=[batch_size, sequence_length, input_size],
+        shape=[batch_size, sequence_length, input_size] if batch_first else [sequence_length, batch_size, input_size],
         hidden_shapes=[[num_directions * num_layers, batch_size, hidden_size]] * 2 if initial_hidden else None,
     )
 
@@ -170,6 +181,30 @@ def test_initialize_parameters(capsys, device, bidirectional, bias):
         },
         device=device,
     )
+
+
+@pytest.mark.parametrize("sequence_length", [1, 3])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_state_feedback(capsys, device, sequence_length):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # large enough for several tiles, whose blocks read the whole initial hidden state
+    kwargs = {"num_layers": 2, "bidirectional": True, "batch_first": False}
+    hidden_shape = [2 * 2, 64, 96]
+    check_state_feedback_rnn(
+        warp_module=nn.LSTM(8, 96, **kwargs),
+        device=device,
+        shape=[sequence_length, 64, 8],
+        hidden_shapes=[hidden_shape] * 2,
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_input_feedback(capsys, device):
+    if not utilities.is_device_available(device):
+        pytest.skip(f"Device '{device}' is not available")
+    # the final hidden state (1, batch_size, hidden_size) is a valid sequence-first input of one time step
+    check_input_feedback_rnn(warp_module=nn.LSTM(96, 96, batch_first=False), device=device, shape=[1, 64, 96])
 
 
 def test_invalid_arguments(capsys):
